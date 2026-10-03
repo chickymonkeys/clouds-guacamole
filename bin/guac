@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Clouds Guacamole CLI and daemon launcher."""
+
+import os
+import sys
+
+# The plugin folder is watched by the Omarchy shell, which hot-reloads on any change:
+# never write __pycache__ next to the sources.
+sys.dont_write_bytecode = True
+
+_here = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(_here), "lib"))
+
+from guac.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()
