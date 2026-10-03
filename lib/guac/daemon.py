@@ -376,6 +376,28 @@ def _parse_conflicts(text: str) -> List[str]:
     return out
 
 
+def _transient_failure(text: str) -> str:
+    """"rate" or "network" when bisync's critical error came from throttling or the network.
+
+    bisync ends every critical error with "Must run --resync to recover", so that phrase alone
+    doesn't mean the sync state is broken: a throttled or dropped listing only needs a retry.
+    """
+    critical = "\n".join(l for l in text.splitlines() if "critical error" in l.lower())
+    kind = util.classify_error(critical) if critical else "other"
+    return kind if kind in ("rate", "network") else ""
+
+
+def _stats_speed(stats: Dict[str, Any]) -> int:
+    """Bytes per second of a core/stats answer.
+
+    rclone leaves the per-file speeds empty for transfers driven by sync and bisync, so fall
+    back to the group's average while something is moving.
+    """
+    moving = stats.get("transferring") or []
+    per_file = sum(int(t.get("speedAvg") or 0) for t in moving)
+    return int(per_file or (float(stats.get("speed") or 0) if moving else 0))
+
+
 class Client:
     def __init__(self, writer: asyncio.StreamWriter):
         self.writer = writer
@@ -1333,12 +1355,7 @@ class Daemon:
                 "current": util.neutralize_controls(
                     os.path.basename(str(current.get("name", "")))
                 ),
-                "speed": int(
-                    sum(
-                        int(t.get("speedAvg", 0) or 0)
-                        for t in stats.get("transferring") or []
-                    )
-                ),
+                "speed": _stats_speed(stats),
             }
             if progress != f.progress:
                 f.progress = progress
@@ -1399,7 +1416,10 @@ class Daemon:
         else:
             detail = util.clean_error(err or text)
             blob = (err + "\n" + text[-6000:]).lower()
-            log.warning("sync %s failed: %s", f.id, detail)
+            transient = _transient_failure(blob)
+            log.warning(
+                "sync %s failed: %s%s", f.id, detail, f" ({transient})" if transient else ""
+            )
             if (
                 "run with --force" in blob
                 or "too many deletes" in blob
@@ -1418,7 +1438,7 @@ class Daemon:
                     "One side is empty, so nothing was synced. "
                     "Resync restores files to the empty side; Sync anyway would empty the other side too.",
                 )
-            elif (
+            elif not transient and (
                 "must run --resync" in blob
                 or "cannot find prior" in blob
                 or "md5 hash not found" in blob
@@ -1449,7 +1469,10 @@ class Daemon:
                     f"The cloud folder '{f.path}' was not found. It may have been moved or deleted.",
                 )
             else:
-                kind = util.classify_error(blob)
+                if transient and f.initialized and "must run --resync" in blob:
+                    # Retried later; bisync won't run again without a resync
+                    f.resync_reason = f.resync_reason or "recover"
+                kind = transient or util.classify_error(blob)
                 if kind == "auth":
                     self._folder_attention(
                         f,
@@ -1714,7 +1737,7 @@ class Daemon:
             moving = stats.get("transferring") or []
             transfers = {
                 "count": len(moving),
-                "speed": int(sum(int(t.get("speedAvg", 0) or 0) for t in moving)),
+                "speed": _stats_speed(stats),
                 "names": [
                     util.neutralize_controls(os.path.basename(str(t.get("name", ""))))
                     for t in moving[:3]

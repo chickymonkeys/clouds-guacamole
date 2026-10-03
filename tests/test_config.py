@@ -130,6 +130,24 @@ class PathTests(unittest.TestCase):
         self.assertEqual(classify_error("googleapi: Error 403: Rate Limit Exceeded, rateLimitExceeded"), "rate")
         self.assertEqual(classify_error('oauth2: "invalid_grant" "Token has been expired or revoked."'), "auth")
 
+    def test_bisync_failures(self) -> None:
+        from guac.daemon import _transient_failure
+        throttled = ("ERROR : Bisync critical error: couldn't list directory: googleapi: Error 403: Quota exceeded "
+                     "for quota metric 'Queries' (rateLimitExceeded)\nERROR : Bisync aborted. Must run --resync to recover.")
+        self.assertEqual(_transient_failure(throttled), "rate", "a throttled listing is retried, not a broken state")
+        offline = "ERROR : Bisync critical error: dial tcp: lookup www.googleapis.com: no such host\n"
+        self.assertEqual(_transient_failure(offline), "network")
+        broken = ("ERROR : Bisync critical error: cannot find prior Path1 or Path2 listings\n"
+                  "ERROR : Bisync aborted. Must run --resync to recover.")
+        self.assertEqual(_transient_failure(broken), "")
+
+    def test_sync_speed(self) -> None:
+        from guac.daemon import _stats_speed
+        # rclone 1.75 leaves speedAvg empty for files copied by sync and bisync
+        self.assertEqual(_stats_speed({"speed": 2461695.8, "transferring": [{"name": "a.pdf", "speedAvg": None}]}), 2461695)
+        self.assertEqual(_stats_speed({"speed": 9.0, "transferring": [{"speedAvg": 100}, {"speedAvg": 50}]}), 150)
+        self.assertEqual(_stats_speed({"speed": 2461695.8, "transferring": []}), 0, "idle shows no speed")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
