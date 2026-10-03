@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A cloud with an avocado: streaming drives, with the folders you keep close -->
+  <path d="M18 50h30a12 12 0 0 0 1.6-23.9A16 16 0 0 0 19 22.3 13.5 13.5 0 0 0 18 50z"
+        fill="#cfd8dc" stroke="#546e7a" stroke-width="2.5" stroke-linejoin="round"/>
+  <ellipse cx="32" cy="39" rx="9" ry="11" transform="rotate(-18 32 39)" fill="#4f7d2c"/>
+  <ellipse cx="32" cy="39.5" rx="6.6" ry="8.4" transform="rotate(-18 32 39.5)" fill="#c5e17a"/>
+  <circle cx="31.4" cy="41.6" r="3.6" fill="#8d5a2b"/>
+</svg>
