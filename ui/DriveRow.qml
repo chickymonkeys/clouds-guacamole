@@ -18,11 +18,12 @@ Item {
   property string mountRoot: ""
   property bool editing: false
   property bool confirmingRemove: false
-  // Whether the local folders are listed
+  // Whether the local folders are listed; the panel keeps it, so it outlives this card
   property bool foldersOpen: false
 
   signal keepFolderRequested(string remote)
   signal clientIdRequested(string remote)
+  signal foldersToggled()
 
   readonly property color dim: Qt.darker(foreground, 1.6)
   // Everything below the header lines up with the drive's name
@@ -501,7 +502,7 @@ Item {
       foreground: root.foreground
       fontFamily: root.fontFamily
       home: root.home
-      onToggled: root.foldersOpen = !root.foldersOpen
+      onToggled: root.foldersToggled()
       onKeepFolderRequested: root.keepFolderRequested(root.drive.name)
     }
   }

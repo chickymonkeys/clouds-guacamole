@@ -42,6 +42,15 @@ Item {
   }
   // Unmount anyway, when the daemon refused because of uploads or open files
   readonly property bool canForce: service.lastErrorCode === "uploads_pending" || service.lastErrorCode === "busy"
+  // Drives whose local folders are listed, by name; kept here so the choice outlives the cards,
+  // which are rebuilt when a drive is added or removed
+  property var openFolderLists: ({})
+
+  function setFoldersOpen(remote, open) {
+    var lists = Object.assign({}, openFolderLists)
+    lists[remote] = open
+    openFolderLists = lists
+  }
 
   function showView(view) {
     // An error belongs to the view it happened in
@@ -240,7 +249,13 @@ Item {
             fontFamily: root.fontFamily
             home: root.service.home
             mountRoot: root.service.mountRoot
-            onKeepFolderRequested: function(remote) { root.openBrowse(remote) }
+            foldersOpen: root.openFolderLists[drive.name] === true
+            onFoldersToggled: root.setFoldersOpen(drive.name, !foldersOpen)
+            // The folder about to be added shows when the panel comes back
+            onKeepFolderRequested: function(remote) {
+              root.setFoldersOpen(remote, true)
+              root.openBrowse(remote)
+            }
             onClientIdRequested: function(remote) { root.openClient(remote) }
           }
         }
