@@ -4,9 +4,9 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// A cloud drive: streaming switch, quota, problems with a one-click fix, and the folders of
-// this drive that are kept on this device. Renaming, moving, the own client and removing live
-// behind the ⋯ button, so the card itself only says what matters now.
+// A cloud drive: streaming switch, quota, problems with a one-click fix, and a dropdown of the
+// folders of this drive that are kept on this device. Renaming, moving, the own client and
+// removing live behind the ⋯ button, so the card itself only says what matters now.
 Item {
   id: root
 
@@ -18,6 +18,8 @@ Item {
   property string mountRoot: ""
   property bool editing: false
   property bool confirmingRemove: false
+  // Whether the local folders are listed
+  property bool foldersOpen: false
 
   signal keepFolderRequested(string remote)
   signal clientIdRequested(string remote)
@@ -32,12 +34,6 @@ Item {
   readonly property bool quotaKnown: drive.quotaKnown === true
   readonly property bool quotaHigh: quotaKnown && drive.quotaPercent > 90
   readonly property var folders: drive.folders || []
-  // Past this many folders the list folds into one line, keeping only those that need you
-  readonly property int foldAfter: 3
-  property bool foldersExpanded: false
-  readonly property bool foldable: folders.length > foldAfter
-  readonly property bool folded: foldable && !foldersExpanded
-  readonly property var routineFolders: folders.filter(function(f) { return !Model.folderStaysListed(f) })
   readonly property bool hasEdits: editing && (labelInput.text.trim() !== String(drive.label || "")
                                               || pathInput.text.trim() !== String(drive.mountPath || ""))
 
@@ -496,50 +492,17 @@ Item {
     }
 
     // Folders kept on this device, lined up under the drive's name
-    ColumnLayout {
+    FolderList {
       Layout.fillWidth: true
       Layout.leftMargin: root.indent - Style.space(8)
-      spacing: 0
-
-      Repeater {
-        // By index: each state push brings new objects, and rebuilding rows would drop open confirmations
-        model: root.folders.length
-
-        FolderRow {
-          required property int index
-          visible: !root.folded || Model.folderStaysListed(folder)
-          Layout.fillWidth: true
-          folder: root.folders[index] || ({})
-          service: root.service
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          home: root.home
-        }
-      }
-
-      FolderFoldRow {
-        visible: root.foldable && root.routineFolders.length > 0
-        Layout.fillWidth: true
-        folders: root.routineFolders
-        expanded: root.foldersExpanded
-        more: root.routineFolders.length < root.folders.length
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onToggled: root.foldersExpanded = !root.foldersExpanded
-      }
-
-      Button {
-        horizontalPadding: Style.space(8)
-        iconText: "󰐕"
-        iconSize: Style.font.body
-        text: "Keep a folder on this device"
-        tooltipText: "Pick a cloud folder to have locally: instant and available offline, synced both ways"
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        foreground: Qt.darker(root.foreground, 1.45)
-        bordered: false
-        onClicked: root.keepFolderRequested(root.drive.name)
-      }
+      folders: root.folders
+      open: root.foldersOpen
+      service: root.service
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      home: root.home
+      onToggled: root.foldersOpen = !root.foldersOpen
+      onKeepFolderRequested: root.keepFolderRequested(root.drive.name)
     }
   }
 }

@@ -46,10 +46,12 @@ CursorSurface {
 
   ColumnLayout {
     id: col
+    // From the top, so closing the list rolls the row up from below
     anchors {
       left: parent.left
       right: parent.right
-      verticalCenter: parent.verticalCenter
+      top: parent.top
+      topMargin: Style.space(3)
       leftMargin: Style.space(8)
       rightMargin: Style.space(4)
     }
