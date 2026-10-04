@@ -212,6 +212,50 @@ def scene(name: str):
             ),
             nextcloud,
         ]
+    elif name == "many":
+        # One drive keeping nine folders: folded down to the ones that need you
+        kept = [
+            folder("Drive", p, f"b{i:07x}", lastSync=ago(60 * (i + 2)))
+            for i, p in enumerate(
+                (
+                    "Documents/Papers",
+                    "Documents/Receipts",
+                    "Obsidian",
+                    "Finance/Taxes",
+                    "Music/Scores",
+                    "Photos/2024",
+                )
+            )
+        ]
+        new = folder(
+            "Drive",
+            "Work/Projects",
+            "b7a41e5c",
+            state="syncing",
+            nextSync=0,
+            initialized=False,
+            resync=True,
+            progress={
+                "bytes": 96 * MB,
+                "totalBytes": int(3.2 * GB),
+                "transfers": 41,
+                "totalTransfers": 2210,
+                "checks": 2210,
+                "current": "site/assets/map.pdf",
+                "speed": int(4.2 * MB),
+            },
+        )
+        conflicted = notes(conflicts=["todo.conflict1.md"], conflictCount=1)
+        drives = [
+            gdrive(folders=[conflicted, thesis(**SYNCING), *kept[:3], new, *kept[3:]]),
+            dropbox(folders=[photos()]),
+            nextcloud,
+        ]
+        transfers = {
+            "count": 2,
+            "speed": int(12.6 * MB),
+            "names": ["results-03.pdf", "map.pdf"],
+        }
     elif name == "shared":
         drives = [gdrive(custom=False)]
     else:

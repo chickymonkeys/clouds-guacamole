@@ -180,6 +180,11 @@ ShellRoot {
     })
     shot("conflicts")
 
+    // Many folders on one drive: folded down to the ones that need you
+    step("many-folders scene", function() { scene("many") }, 1200)
+    step("folded", function() { return driveCard("Drive").folded === true })
+    shot("many-folders")
+
     // Own client: the card's notice, then the guide
     step("shared-client scene", function() { scene("shared") }, 1200)
     step("Set up", function() { return click("Set up", driveCard("Drive")) }, 1500)

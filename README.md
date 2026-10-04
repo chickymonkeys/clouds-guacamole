@@ -70,7 +70,7 @@ Guacamole walks you through creating one, step by step, the same way for every o
 </table>
 
 - When adding any of these drives, the own-client setup is on by default (it can be switched off, except that Google Drive then warns it will stop working).
-- On an existing drive, use **Set up** on the card's notice, or the drive editor (󰏫 → *Set up my own client*). A drive that gets rate-limited offers it too.
+- On an existing drive, use **Set up** on the card's notice, or the drive's 󰇘 menu (*Set up my own client*). A drive that gets rate-limited offers it too.
 - From a terminal: `guac set-client-id Drive` runs the same guided setup, and `guac client-guide dropbox` prints the steps.
 
 | Provider     | Own client                                          | What you create                                       | Redirect URI              | rclone docs                                                                  |
@@ -119,18 +119,22 @@ Remotes already in your rclone config appear as drives right away, not streamed 
 <p><img src="docs/images/bar-states.png" width="506" alt="The bar icon: a green filled cloud when all is good, a spinner while files move, an amber outline when offline or not streaming, and red with a dot when something needs you"></p>
 
 - **Bar icon.** Green when everything you asked for is healthy. Yellow when nothing is streaming or you're offline. Red with a dot when something needs you. It spins while files move. Left-click opens the panel, right-click syncs local folders now, middle-click streams or stops all drives.
-- **Panel keys.** `a` add a drive, `s` settings, `r` sync now, `m` stream or stop all, `o` open `~/Cloud`, `Esc` back or close.
+- **Panel.** The header says the one thing worth knowing now: what needs you, syncing with its speed, offline, or up to date. The footer has *Add drive* and buttons to sync local folders now, open `~/Cloud` and open Settings. Keys: `a` add a drive, `s` settings, `r` sync now, `m` stream or stop all, `o` open `~/Cloud`, `Esc` back or close.
 - **Drive cards.** Each card shows:
-  - a streaming switch and the drive's quota;
-  - files still uploading;
+  - a streaming switch, and one line with the drive's quota and files still uploading, or its state when it isn't streaming;
   - problems, with a one-click fix: *Retry*, *Reconnect account*, *Take over*, *Set up my own client*;
-  - rename and move;
-  - its local folders, with state, progress and conflicts.
+  - rename, move, your own client and remove, behind 󰇘;
+  - its local folders, one line each with their state. Hover a folder for *Sync now*, *Open*, *Pause* and *Stop*, and its name for where it syncs. Progress, conflicts and anything that needs you show under it.
+- **Many folders.** Past three, a drive's folders fold into one line that says what they are doing; click it to list them all. Folders that need you, and new ones still on their first download, stay listed.
 - **Settings.** Stream and sync locations, cache size, sync interval, backup retention and notifications. The **Engine** row has:
   - *Restart* (rclone);
   - *Log*, an in-panel viewer for Guacamole's and rclone's logs, with a problems-only filter, copy and open;
   - *Filters*, which opens `filters.txt` in your editor;
   - *Backups*, the local files syncs replaced or deleted (it says so when there are none yet).
+
+<p align="center">
+  <img src="docs/images/many-folders.png" width="400" alt="A drive keeping nine folders, folded: a folder with a conflict and a new one on its first download stay listed, and the other seven fold into one line saying one of them is syncing">
+</p>
 
 <table>
   <tr>
