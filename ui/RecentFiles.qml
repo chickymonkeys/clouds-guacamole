@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
@@ -7,6 +6,8 @@ import "Model.js" as Model
 
 // Collapsible list of recently used cloud files: opened through a mount (served from the
 // cache) or changed in a folder kept on this device. Nothing here touches the network.
+// Open, it lists them all and the panel scrolls; a scrolling list inside the scrolling panel
+// trapped the wheel and hid most of the files.
 ColumnLayout {
   id: root
 
@@ -14,7 +15,6 @@ ColumnLayout {
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property bool expanded: false
-  property real maxListHeight: Style.space(170)
 
   signal fileSelected(string filePath)
 
@@ -83,79 +83,84 @@ ColumnLayout {
     }
   }
 
-  ListView {
+  Item {
     Layout.fillWidth: true
-    Layout.preferredHeight: root.expanded ? Math.min(contentHeight, root.maxListHeight) : 0
-    visible: Layout.preferredHeight > 0
+    Layout.preferredHeight: root.expanded ? list.implicitHeight : 0
+    // Shown from the start of opening: a hidden Column measures no rows, so it would never grow
+    visible: root.expanded || Layout.preferredHeight > 0
     clip: true
-    boundsBehavior: Flickable.StopAtBounds
-    interactive: contentHeight > height
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
     Behavior on Layout.preferredHeight { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
-    model: root.files ? root.files.length : 0
+    Column {
+      id: list
+      width: parent.width
 
-    delegate: CursorSurface {
-      id: fileRow
-      required property int index
-      readonly property var file: root.files[index] || ({})
-      width: ListView.view.width
-      implicitHeight: Style.space(34)
-      hasCursor: rowMouse.containsMouse
+      Repeater {
+        model: root.files ? root.files.length : 0
 
-      MouseArea {
-        id: rowMouse
-        anchors.fill: parent
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.fileSelected(fileRow.file.path)
-      }
+        delegate: CursorSurface {
+          id: fileRow
+          required property int index
+          readonly property var file: root.files[index] || ({})
+          width: list.width
+          implicitHeight: Style.space(34)
+          hasCursor: rowMouse.containsMouse
 
-      RowLayout {
-        anchors {
-          fill: parent
-          leftMargin: Style.space(8)
-          rightMargin: Style.space(8)
-        }
-        spacing: Style.space(8)
-
-        Text {
-          text: Model.fileGlyph(fileRow.file.name)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          color: Color.accent
-        }
-
-        ColumnLayout {
-          Layout.fillWidth: true
-          spacing: 0
-
-          Text {
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            text: fileRow.file.name || ""
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            color: root.foreground
-            elide: Text.ElideRight
+          MouseArea {
+            id: rowMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.fileSelected(fileRow.file.path)
           }
 
-          Text {
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            text: (fileRow.file.where === "local" ? "󰋊 " : "󰅟 ") + fileRow.file.remote + " · " + (fileRow.file.folder || "/")
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption - Style.space(1)
-            color: Qt.darker(root.foreground, 1.7)
-            elide: Text.ElideMiddle
-          }
-        }
+          RowLayout {
+            anchors {
+              fill: parent
+              leftMargin: Style.space(8)
+              rightMargin: Style.space(8)
+            }
+            spacing: Style.space(8)
 
-        Text {
-          text: Model.ago(fileRow.file.modifiedTs)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          color: Qt.darker(root.foreground, 1.8)
+            Text {
+              text: Model.fileGlyph(fileRow.file.name)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              color: Color.accent
+            }
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 0
+
+              Text {
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: fileRow.file.name || ""
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                color: root.foreground
+                elide: Text.ElideRight
+              }
+
+              Text {
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: (fileRow.file.where === "local" ? "󰋊 " : "󰅟 ") + fileRow.file.remote + " · " + (fileRow.file.folder || "/")
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption - Style.space(1)
+                color: Qt.darker(root.foreground, 1.7)
+                elide: Text.ElideMiddle
+              }
+            }
+
+            Text {
+              text: Model.ago(fileRow.file.modifiedTs)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: Qt.darker(root.foreground, 1.8)
+            }
+          }
         }
       }
     }
