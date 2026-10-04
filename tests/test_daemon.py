@@ -78,16 +78,20 @@ class Sandbox:
         os.environ.update(self.env)
         sys.path.insert(0, str(REPO / "lib"))
         self.proc = None
+        self._fid = (
+            ""  # the folder test_keep_local_sync keeps, for the scenarios after it
+        )
 
     def start(self) -> None:
-        log = open(self.tmp / "daemon.out", "ab")
-        self.proc = subprocess.Popen(
-            [sys.executable, str(REPO / "bin" / "guac"), "daemon", "-v"],
-            env=self.env,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
-        )
+        # The daemon keeps its own copy of the descriptor
+        with open(self.tmp / "daemon.out", "ab") as log:
+            self.proc = subprocess.Popen(
+                [sys.executable, str(REPO / "bin" / "guac"), "daemon", "-v"],
+                env=self.env,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
         wait(lambda: self.state()["engine"]["state"] == "running", 20, "daemon ready")
 
     def stop(self) -> None:
@@ -105,8 +109,10 @@ class Sandbox:
         self.stop()
         for line in Path("/proc/self/mountinfo").read_text().splitlines():
             mp = line.split()[4]
-            if mp.startswith(str(self.tmp)) or mp.startswith(str(self.run)):
-                subprocess.run(["fusermount3", "-uz", mp], capture_output=True)
+            if mp.startswith((str(self.tmp), str(self.run))):
+                subprocess.run(
+                    ["fusermount3", "-uz", mp], capture_output=True, check=False
+                )
         shutil.rmtree(self.run, ignore_errors=True)
         if not keep:
             shutil.rmtree(self.tmp, ignore_errors=True)
@@ -347,6 +353,7 @@ def test_takeover(sb: Sandbox) -> None:
             subprocess.run(
                 ["pgrep", "-f", f"rclone mount CloudB: {os.path.realpath(mp)}"],
                 capture_output=True,
+                check=False,
             ).returncode
             != 0
         ),
@@ -364,7 +371,7 @@ def test_parallel_sync(sb: Sandbox) -> None:
             (sb.remote_b / name / doc).write_text("start\n")
     ids = [sb.ok("add_folder", remote="CloudB", path=name)["id"] for name in names]
     for fid in ids:
-        wait(lambda: sb.folder(fid)["state"] == "synced", 30, "first sync")
+        wait(lambda fid=fid: sb.folder(fid)["state"] == "synced", 30, "first sync")
     locals_ = [Path(sb.folder(fid)["local"]) for fid in ids]
 
     # Enough new files that each sync is still running when the other starts
@@ -410,6 +417,7 @@ def test_parallel_sync(sb: Sandbox) -> None:
                     f"rclone rcd --rc-addr=unix://{sb.run}/guacamole/sync-",
                 ],
                 capture_output=True,
+                check=False,
             ).returncode
             != 0
         ),
@@ -532,6 +540,7 @@ def test_shutdown_unmounts(sb: Sandbox) -> None:
         subprocess.run(
             ["pgrep", "-f", f"rclone rcd --rc-addr=unix://{sb.run}"],
             capture_output=True,
+            check=False,
         ).returncode
         != 0
     ), "rclone stops with guacd"

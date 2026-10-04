@@ -341,7 +341,7 @@ def _resolve_onedrive(token_json: str) -> tuple[str | None, str | None]:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read(1 << 20).decode())
         return data.get("id"), data.get("driveType", "personal")
-    except Exception:
+    except Exception:  # noqa: BLE001 - any failure means the drive can't be looked up
         return None, None
 
 
@@ -361,7 +361,7 @@ def _resolve_pcloud_host(token_json: str) -> str | None:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 if json.loads(resp.read(1 << 20).decode()).get("result") == 0:
                     return host
-        except Exception:  # noqa: BLE001 - any failure means "not this host"
+        except Exception:  # noqa: BLE001, S112 - any failure means "not this host"
             continue
     return None
 
@@ -481,10 +481,11 @@ class Daemon:
         self.backup_files = 0  # local files syncs replaced or deleted, kept in backups/
         self._filters_md5 = ""
         self._tasks: list[asyncio.Task] = []
-        self._dirty: asyncio.Event | None = None
-        self._stop: asyncio.Event | None = None
-        self._wake: asyncio.Event | None = None
-        self._tick_now: asyncio.Event | None = None
+        # Bound to the event loop on first use
+        self._dirty = asyncio.Event()
+        self._stop = asyncio.Event()
+        self._wake = asyncio.Event()
+        self._tick_now = asyncio.Event()
 
     # ------------------------------------------------------------------ plumbing
 
@@ -494,12 +495,10 @@ class Daemon:
         return time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
 
     def mark(self) -> None:
-        if self._dirty is not None:
-            self._dirty.set()
+        self._dirty.set()
 
     def wake(self) -> None:
-        if self._wake is not None:
-            self._wake.set()
+        self._wake.set()
 
     async def rc(
         self,
@@ -619,10 +618,6 @@ class Daemon:
 
     async def run(self) -> int:
         loop = asyncio.get_running_loop()
-        self._dirty = asyncio.Event()
-        self._stop = asyncio.Event()
-        self._wake = asyncio.Event()
-        self._tick_now = asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._stop.set)
         loop.add_signal_handler(signal.SIGHUP, lambda: self._spawn(self.reload()))
@@ -780,7 +775,7 @@ class Daemon:
                 await self._sleep(15)
                 continue
             try:
-                await self._start_engine()
+                engine = await self._start_engine()
             except Exception as e:  # noqa: BLE001 - surface any startup failure
                 self.engine_state, self.engine_error = "error", util.clean_error(str(e))
                 log.error("rclone failed to start: %s", e)
@@ -795,7 +790,7 @@ class Daemon:
                 await self._after_engine_start()
             except Exception:
                 log.exception("post-start setup failed")
-            code = await self.engine.wait()
+            code = await engine.wait()
             if self._stop.is_set():
                 return
             log.warning("rclone exited unexpectedly (%s); restarting", code)
@@ -810,7 +805,7 @@ class Daemon:
         except asyncio.TimeoutError:
             pass
 
-    async def _start_engine(self) -> None:
+    async def _start_engine(self) -> asyncio.subprocess.Process:
         sock = paths.rclone_socket()
         paths.ensure_private_dir(sock.parent)
         if sock.exists():
@@ -830,7 +825,7 @@ class Daemon:
                 sock.unlink()
             except OSError:
                 pass
-        self.engine = await self._launch_rcd(
+        self.engine = engine = await self._launch_rcd(
             sock,
             self.rcc,
             [
@@ -849,11 +844,14 @@ class Daemon:
         except RcError:
             pass
         log.info("rclone %s ready", self.rclone_version)
+        return engine
 
     async def _launch_rcd(
         self, sock: Path, rcc: RcClient, extra: list[str]
     ) -> asyncio.subprocess.Process:
         """Start an `rclone rcd` on sock and wait until it answers."""
+        if not self.rclone_bin:
+            raise RcUnavailable("rclone is not installed")
         log_path = paths.rclone_log()
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         args = [
@@ -1404,7 +1402,7 @@ class Daemon:
         group = f"guac/{f.id}"
         w = self.workers.get(f.id)
         lost = w is None or w.proc.returncode is not None
-        if not lost:
+        if w is not None and not lost:
             try:
                 js = await self.rc(
                     "job/status", {"jobid": f.job_id}, timeout=5, client=w.rcc
@@ -1413,7 +1411,7 @@ class Daemon:
                 lost = "not found" in str(e).lower() or isinstance(e, RcUnavailable)
                 if not lost:
                     return
-        if lost:
+        if lost or w is None:
             log.warning("sync %s lost its rclone process; retrying", f.id)
             await self._stop_worker(f.id)
             f.job_id, f.progress, f.moving, f.retry_at = 0, {}, [], time.time() + 5
@@ -1613,8 +1611,6 @@ class Daemon:
         asyncio.get_running_loop().add_reader(self.inotify.fd, self._on_inotify)
 
     def _watch_folder(self, f: Folder) -> None:
-        if self._dirty is None:
-            return
         self._spawn(self._add_watches(f.id, f.local))
 
     async def _add_watches(self, fid: str, top: str) -> None:
@@ -2451,7 +2447,7 @@ class Daemon:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            _, err = await asyncio.wait_for(proc.communicate(), 15)
+            await asyncio.wait_for(proc.communicate(), 15)
             if proc.returncode != 0:
                 await self._lazy_unmount(mp)
         d.mount_state, d.retry_at = "off", 0
@@ -2802,6 +2798,8 @@ class Daemon:
         return {}
 
     async def _authorize(self, rtype: str, client_id: str, client_secret: str) -> str:
+        if not self.rclone_bin:
+            raise UserError("rclone is not installed")
         env = os.environ.copy()
         # The environment is private to this user; argv would be visible to everyone
         if client_id:
@@ -2819,12 +2817,14 @@ class Daemon:
             preexec_fn=util.die_with_parent(),
         )
         self._auth_proc = proc
+        out, err = proc.stdout, proc.stderr
+        assert out is not None and err is not None  # both are pipes
         stdout = bytearray()
         stderr_tail: list[str] = []
 
         async def read_out() -> None:
             while True:
-                chunk = await proc.stdout.read(65536)
+                chunk = await out.read(65536)
                 if not chunk:
                     return
                 if len(stdout) < 1 << 20:
@@ -2832,7 +2832,7 @@ class Daemon:
 
         async def read_err() -> None:
             while True:
-                line = await proc.stderr.readline()
+                line = await err.readline()
                 if not line:
                     return
                 text = line.decode(errors="replace").strip()
@@ -3004,7 +3004,8 @@ class Daemon:
         name = clean_remote_name(args.get("name") or meta["name"].replace(" ", ""))
         if name in self.remotes:
             raise UserError(f"A drive named '{name}' already exists")
-        opts = args.get("options") if isinstance(args.get("options"), dict) else {}
+        raw = args.get("options")
+        opts = raw if isinstance(raw, dict) else {}
         o = {k: str(v).strip() for k, v in opts.items() if v is not None}
         params: dict[str, str] = {}
         rtype = meta["rclone_type"]

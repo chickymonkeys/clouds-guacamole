@@ -486,7 +486,10 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(f"{data['count']} files, {util.human_bytes(data['bytes'])}")
     elif a.cmd == "client-guide":
-        print_client_guide(providers.client_guide(a.provider))
+        guide = providers.client_guide(a.provider)
+        if guide is None:
+            sys.exit(f"guac: rclone has no own-client setup for {a.provider}")
+        print_client_guide(guide)
     elif a.cmd == "add-oauth":
         guide = providers.client_guide(a.provider)
         creds = {"client_id": a.client_id, "client_secret": ""}

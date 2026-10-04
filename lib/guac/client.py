@@ -122,6 +122,7 @@ def _systemctl(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
         text=True,
         timeout=timeout,
         env=_systemd_env(),
+        check=False,
     )
 
 
@@ -168,6 +169,7 @@ def start(wait: float = 15.0) -> str:
             text=True,
             timeout=30,
             env=_systemd_env(),
+            check=False,
         )
         how = "systemd-run" if res.returncode == 0 else ""
     if not how:
