@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import paths
 
@@ -53,7 +53,7 @@ class Connection:
             raise DaemonError(f"guacd is not running ({e})") from e
         self.file = self.sock.makefile("rb")
         self._next_id = 1
-        self.state: Optional[Dict[str, Any]] = None
+        self.state: dict[str, Any] | None = None
 
     def close(self) -> None:
         try:
@@ -62,7 +62,7 @@ class Connection:
         except OSError:
             pass
 
-    def read_message(self) -> Dict[str, Any]:
+    def read_message(self) -> dict[str, Any]:
         line = self.file.readline()
         if not line:
             raise DaemonError("guacd closed the connection")
@@ -71,14 +71,14 @@ class Connection:
             self.state = msg.get("data")
         return msg
 
-    def first_state(self) -> Dict[str, Any]:
+    def first_state(self) -> dict[str, Any]:
         while self.state is None:
             self.read_message()
         return self.state
 
     def request(
-        self, cmd: str, args: Optional[Dict[str, Any]] = None, timeout: float = 120.0
-    ) -> Dict[str, Any]:
+        self, cmd: str, args: dict[str, Any] | None = None, timeout: float = 120.0
+    ) -> dict[str, Any]:
         mid = self._next_id
         self._next_id += 1
         self.sock.sendall(
@@ -105,7 +105,7 @@ def is_running() -> bool:
         conn.close()
 
 
-def _systemd_env() -> Dict[str, str]:
+def _systemd_env() -> dict[str, str]:
     """Environment for talking to the user's systemd: it lives in the standard runtime dir,
     whatever XDG_RUNTIME_DIR the caller has (the daemon still gets the caller's via --setenv)."""
     env = dict(os.environ)

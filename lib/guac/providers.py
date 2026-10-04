@@ -1,9 +1,10 @@
 """Cloud provider metadata (glyphs use Nerd Font code points, like the rest of Omarchy)."""
 
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
-PROVIDERS: Dict[str, Dict[str, Any]] = {
+PROVIDERS: dict[str, dict[str, Any]] = {
     "drive": {
         "name": "Google Drive",
         "rclone_type": "drive",
@@ -84,20 +85,23 @@ OAUTH_TYPES = {"drive", "onedrive", "dropbox", "box", "pcloud"}
 # one. Steps follow rclone's docs (rclone 1.75) and, for pCloud, which rclone doesn't cover,
 # pCloud's developer site. The UI and `guac set-client-id` both render them. A field "pattern" is a regex the value must match,
 # "reject" one it must not (the usual copy-paste mix-up), each with the message to show.
-CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
+CLIENT_GUIDES: dict[str, dict[str, Any]] = {
     "drive": {
         "title": "Your own Google client",
         "required": True,
         "minutes": 5,
         "why": "rclone's built-in Google client is shared by every rclone user, so Google throttles it "
-        "(slow listings, \"rate limit exceeded\"), and it stops working during 2026. A client of your "
+        '(slow listings, "rate limit exceeded"), and it stops working during 2026. A client of your '
         "own is free, and any Google account can own it.",
         "steps": [
             {
                 "title": "Create a project",
                 "text": "Sign in to Google Cloud with any Google account and create a project. "
                 "Any name works, for example Guacamole.",
-                "link": {"label": "Create a project", "url": "https://console.cloud.google.com/projectcreate"},
+                "link": {
+                    "label": "Create a project",
+                    "url": "https://console.cloud.google.com/projectcreate",
+                },
             },
             {
                 "title": "Enable the Google Drive API",
@@ -112,13 +116,19 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
                 "text": "Click Get started. App name: anything (rclone is fine). Support email: yours. "
                 "Audience: External (Internal only reaches accounts of your own Workspace). Add your "
                 "contact email, accept the terms and click Create.",
-                "link": {"label": "Open Google Auth Platform", "url": "https://console.cloud.google.com/auth/overview"},
+                "link": {
+                    "label": "Open Google Auth Platform",
+                    "url": "https://console.cloud.google.com/auth/overview",
+                },
             },
             {
                 "title": "Add the Drive scopes",
                 "text": "Click Add or remove scopes, paste these into Manually add scopes, click Add to "
                 "table and Update, then Save at the bottom of the page.",
-                "link": {"label": "Open Data access", "url": "https://console.cloud.google.com/auth/scopes"},
+                "link": {
+                    "label": "Open Data access",
+                    "url": "https://console.cloud.google.com/auth/scopes",
+                },
                 "copy": [
                     {
                         "label": "Scopes",
@@ -133,13 +143,19 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
                 "text": "Click Publish app and confirm. Google's review is not needed for personal use. "
                 "An app left in Testing works too, but its sign-in expires every 7 days; if you keep it "
                 "there, add yourself under Test users.",
-                "link": {"label": "Open Audience", "url": "https://console.cloud.google.com/auth/audience"},
+                "link": {
+                    "label": "Open Audience",
+                    "url": "https://console.cloud.google.com/auth/audience",
+                },
             },
             {
                 "title": "Create the client",
                 "text": "Application type: Desktop app, any name, then Create. Copy the client ID and "
                 "the client secret it shows into the fields below.",
-                "link": {"label": "Create a client", "url": "https://console.cloud.google.com/auth/clients/create"},
+                "link": {
+                    "label": "Create a client",
+                    "url": "https://console.cloud.google.com/auth/clients/create",
+                },
             },
         ],
         "signin_note": "Google warns that it hasn't verified the app. It is your own: choose "
@@ -170,7 +186,10 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
                 "text": "Choose Scoped access, then Full Dropbox (App folder would limit the drive to a "
                 "single folder; team folders need Full Dropbox). App names are global, so pick a "
                 "unique one, not rclone. Click Create app.",
-                "link": {"label": "Open the App Console", "url": "https://www.dropbox.com/developers/apps/create"},
+                "link": {
+                    "label": "Open the App Console",
+                    "url": "https://www.dropbox.com/developers/apps/create",
+                },
             },
             {
                 "title": "Grant the permissions",
@@ -267,7 +286,10 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
                 "title": "Create a custom app",
                 "text": "My Apps, Create New App, Custom App. Any name; for Purpose choose Automation. "
                 "Click Next, choose User Authentication (OAuth 2.0), then Create App.",
-                "link": {"label": "Open the Developer Console", "url": "https://app.box.com/developers/console"},
+                "link": {
+                    "label": "Open the Developer Console",
+                    "url": "https://app.box.com/developers/console",
+                },
             },
             {
                 "title": "Add the redirect URI",
@@ -310,12 +332,15 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
                 "title": "Create an app",
                 "text": "Sign in to pCloud's developer site with your pCloud account and create a new app "
                 "with a unique name. Give it access to all folders, with write access.",
-                "link": {"label": "Open My applications", "url": "https://docs.pcloud.com/my_apps/"},
+                "link": {
+                    "label": "Open My applications",
+                    "url": "https://docs.pcloud.com/my_apps/",
+                },
             },
             {
                 "title": "Add the redirect URI",
                 "text": "In the app's settings, add this address under Redirect URIs and save. Without it "
-                "pCloud refuses the sign-in (\"redirect_uri is not authorized\").",
+                'pCloud refuses the sign-in ("redirect_uri is not authorized").',
                 "copy": [{"label": "Redirect URI", "value": "http://localhost:53682/"}],
             },
             {
@@ -341,7 +366,7 @@ CLIENT_GUIDES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def detect(remote: Dict[str, Any]) -> Dict[str, Any]:
+def detect(remote: dict[str, Any]) -> dict[str, Any]:
     rtype = str(remote.get("type", "")).lower()
     vendor = str(remote.get("vendor", "")).lower()
     if rtype == "webdav" and vendor in ("nextcloud", "owncloud"):
@@ -356,7 +381,7 @@ def detect(remote: Dict[str, Any]) -> Dict[str, Any]:
     return meta
 
 
-def client_guide(rtype: str) -> Optional[Dict[str, Any]]:
+def client_guide(rtype: str) -> dict[str, Any] | None:
     guide = CLIENT_GUIDES.get(rtype)
     if guide is None:
         return None
@@ -376,11 +401,13 @@ def check_client(rtype: str, client_id: str, client_secret: str) -> str:
         if not re.search(spec["pattern"], value):
             return spec["error"]
     if client_id == client_secret:
-        return "The client ID and the secret are the same: paste each into its own field"
+        return (
+            "The client ID and the secret are the same: paste each into its own field"
+        )
     return ""
 
 
-def remote_warnings(remote: Dict[str, Any]) -> List[Dict[str, Any]]:
+def remote_warnings(remote: dict[str, Any]) -> list[dict[str, Any]]:
     """Problems worth showing on a drive card, derived from its rclone config (never exposes secrets)."""
     rtype = str(remote.get("type", "")).lower()
     if rtype not in CLIENT_GUIDES or str(remote.get("client_id", "")).strip():
@@ -407,7 +434,9 @@ def remote_warnings(remote: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
-def visible_warnings(warnings: Iterable[Dict[str, Any]], hidden: Iterable[str]) -> List[Dict[str, Any]]:
+def visible_warnings(
+    warnings: Iterable[dict[str, Any]], hidden: Iterable[str]
+) -> list[dict[str, Any]]:
     hidden = set(hidden)
     return [w for w in warnings if not (w.get("dismissible") and w["code"] in hidden)]
 

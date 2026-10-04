@@ -28,9 +28,10 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from . import __version__, config, paths, providers, recent, util
 from .inotify import (
@@ -143,7 +144,7 @@ class Folder:
     paused: bool = False
     job_id: int = 0
     job_started: float = 0.0
-    progress: Dict[str, Any] = field(default_factory=dict)
+    progress: dict[str, Any] = field(default_factory=dict)
     initialized: bool = False
     last_sync: float = 0.0
     last_changes: int = 0
@@ -162,11 +163,13 @@ class Folder:
     )
     resync_reason: str = ""
     force_next: bool = False
-    conflicts: List[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
     watching: bool = False
     watch_error: str = ""
     waiting_network: bool = False
-    moving: List[str] = field(default_factory=list)  # files the running sync is transferring
+    moving: list[str] = field(
+        default_factory=list
+    )  # files the running sync is transferring
     rerun: bool = False  # "sync now" was asked while a sync was already running
 
 
@@ -213,7 +216,7 @@ def _probe(path: str) -> bool:
         return False
 
 
-def _top_dirs(path: str, limit: int) -> List[str]:
+def _top_dirs(path: str, limit: int) -> list[str]:
     names = []
     with os.scandir(path) as it:
         for entry in it:
@@ -229,7 +232,7 @@ def _top_dirs(path: str, limit: int) -> List[str]:
     return names
 
 
-def _list_dirs(path: str, limit: int) -> List[str]:
+def _list_dirs(path: str, limit: int) -> list[str]:
     names = []
     with os.scandir(path) as it:
         for entry in it:
@@ -245,7 +248,7 @@ def _list_dirs(path: str, limit: int) -> List[str]:
     return sorted(names, key=str.lower)
 
 
-def _collect_dirs(top: str, limit: int) -> List[str]:
+def _collect_dirs(top: str, limit: int) -> list[str]:
     found = []
     stack = [top]
     while stack and len(found) < limit:
@@ -283,7 +286,7 @@ def _ensure_link(fid: str, target: str) -> str:
 
 def _session_name_length(remote_spec: str, link: str) -> int:
     """Length of the file names bisync derives from both sides (see rclone's bilib.SessionName)."""
-    canon = lambda s: re.sub(r"[\\/:?*<>|]", "_", s.strip("\\/"))  # noqa: E731
+    canon = lambda s: re.sub(r"[\\/:?*<>|]", "_", s.strip("\\/"))
     return len(canon(remote_spec)) + 2 + len(canon(link)) + len(".path1.lst-dry-new")
 
 
@@ -326,7 +329,7 @@ def _count_files(root: str, limit: int = 10000) -> int:
     return count
 
 
-def _resolve_onedrive(token_json: str) -> Tuple[Optional[str], Optional[str]]:
+def _resolve_onedrive(token_json: str) -> tuple[str | None, str | None]:
     try:
         token = json.loads(token_json).get("access_token")
         if not token:
@@ -342,7 +345,7 @@ def _resolve_onedrive(token_json: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
-def _resolve_pcloud_host(token_json: str) -> Optional[str]:
+def _resolve_pcloud_host(token_json: str) -> str | None:
     """pCloud keeps US and EU accounts on different API hosts; find the one that knows the token."""
     try:
         token = json.loads(token_json).get("access_token")
@@ -381,7 +384,7 @@ def clean_remote_name(name: Any) -> str:
     return clean
 
 
-def _parse_conflicts(text: str) -> List[str]:
+def _parse_conflicts(text: str) -> list[str]:
     out = []
     for line in text.splitlines():
         if "Renaming Path1 copy" in line or "Renaming Path2 copy" in line:
@@ -393,7 +396,7 @@ def _parse_conflicts(text: str) -> List[str]:
 
 
 def _transient_failure(text: str) -> str:
-    """"rate" or "network" when bisync's critical error came from throttling or the network.
+    """ "rate" or "network" when bisync's critical error came from throttling or the network.
 
     bisync ends every critical error with "Must run --resync to recover", so that phrase alone
     doesn't mean the sync state is broken: a throttled or dropped listing only needs a retry.
@@ -403,7 +406,7 @@ def _transient_failure(text: str) -> str:
     return kind if kind in ("rate", "network") else ""
 
 
-def _stats_speed(stats: Dict[str, Any]) -> int:
+def _stats_speed(stats: dict[str, Any]) -> int:
     """Bytes per second of a core/stats answer.
 
     rclone leaves the per-file speeds empty for transfers driven by sync and bisync, so fall
@@ -442,23 +445,23 @@ class Daemon:
         )
         # Filesystem probes get their own pool: a hung FUSE stat must never starve rc calls
         self.fs_pool = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="fs")
-        self.engine: Optional[asyncio.subprocess.Process] = None
-        self.workers: Dict[str, SyncWorker] = {}  # folder id -> rclone running its sync
+        self.engine: asyncio.subprocess.Process | None = None
+        self.workers: dict[str, SyncWorker] = {}  # folder id -> rclone running its sync
         self.engine_state = "starting"
         self.engine_error = ""
         self.rclone_version = ""
         self.rclone_config_path = ""
         self._rclone_conf_sig: Any = None
-        self.remotes: Dict[str, Dict[str, Any]] = {}
-        self.drives: Dict[str, Drive] = {}
-        self.folders: Dict[str, Folder] = {}
-        self.clients: Set[Client] = set()
+        self.remotes: dict[str, dict[str, Any]] = {}
+        self.drives: dict[str, Drive] = {}
+        self.folders: dict[str, Folder] = {}
+        self.clients: set[Client] = set()
         self.online = util.has_default_route()
-        self.transfers: Dict[str, Any] = {"count": 0, "speed": 0, "names": []}
-        self.recent: List[Dict[str, Any]] = []
+        self.transfers: dict[str, Any] = {"count": 0, "speed": 0, "names": []}
+        self.recent: list[dict[str, Any]] = []
         self._recent_at = 0.0
         self._recent_due = 0.0
-        self.auth: Dict[str, Any] = {
+        self.auth: dict[str, Any] = {
             "busy": False,
             "waiting": False,
             "url": "",
@@ -466,22 +469,22 @@ class Daemon:
             "success": "",
             "remote": "",
         }
-        self._auth_proc: Optional[asyncio.subprocess.Process] = None
-        self._auth_task: Optional[asyncio.Task] = None
-        self.inotify: Optional[Inotify] = None
-        self._wd: Dict[int, Tuple[str, str]] = {}
-        self._folder_wds: Dict[str, Set[int]] = {}
+        self._auth_proc: asyncio.subprocess.Process | None = None
+        self._auth_task: asyncio.Task | None = None
+        self.inotify: Inotify | None = None
+        self._wd: dict[int, tuple[str, str]] = {}
+        self._folder_wds: dict[str, set[int]] = {}
         self._last_state_line = ""
         self._boot_offset = self._boottime_offset()
-        self._notified: Dict[str, float] = {}
+        self._notified: dict[str, float] = {}
         self._backups_pruned = 0.0
         self.backup_files = 0  # local files syncs replaced or deleted, kept in backups/
         self._filters_md5 = ""
-        self._tasks: List[asyncio.Task] = []
-        self._dirty: Optional[asyncio.Event] = None
-        self._stop: Optional[asyncio.Event] = None
-        self._wake: Optional[asyncio.Event] = None
-        self._tick_now: Optional[asyncio.Event] = None
+        self._tasks: list[asyncio.Task] = []
+        self._dirty: asyncio.Event | None = None
+        self._stop: asyncio.Event | None = None
+        self._wake: asyncio.Event | None = None
+        self._tick_now: asyncio.Event | None = None
 
     # ------------------------------------------------------------------ plumbing
 
@@ -501,10 +504,10 @@ class Daemon:
     async def rc(
         self,
         method: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         timeout: float = 30.0,
-        client: Optional[RcClient] = None,
-    ) -> Dict[str, Any]:
+        client: RcClient | None = None,
+    ) -> dict[str, Any]:
         """Call the engine, or with client, the rclone process running a sync."""
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(
@@ -607,7 +610,7 @@ class Daemon:
             "being rate-limited. Set up your own to fix this for good."
         )
 
-    def remote_cfg(self, name: str) -> Dict[str, Any]:
+    def remote_cfg(self, name: str) -> dict[str, Any]:
         if name not in self.cfg["remotes"]:
             self.cfg["remotes"][name] = config.normalize_remote({})
         return self.cfg["remotes"][name]
@@ -790,7 +793,7 @@ class Daemon:
             self.mark()
             try:
                 await self._after_engine_start()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("post-start setup failed")
             code = await self.engine.wait()
             if self._stop.is_set():
@@ -848,7 +851,7 @@ class Daemon:
         log.info("rclone %s ready", self.rclone_version)
 
     async def _launch_rcd(
-        self, sock: Path, rcc: RcClient, extra: List[str]
+        self, sock: Path, rcc: RcClient, extra: list[str]
     ) -> asyncio.subprocess.Process:
         """Start an `rclone rcd` on sock and wait until it answers."""
         log_path = paths.rclone_log()
@@ -888,7 +891,9 @@ class Daemon:
             if proc.returncode is not None:
                 tail = " ".join(util.tail_lines(log_path, 3))
                 raise RuntimeError(f"rclone exited during startup: {tail}")
-            if sock.exists() and await loop.run_in_executor(self.rc_pool, rcc.ping, 1.0):
+            if sock.exists() and await loop.run_in_executor(
+                self.rc_pool, rcc.ping, 1.0
+            ):
                 return proc
             if time.monotonic() > deadline:
                 proc.kill()
@@ -1067,7 +1072,7 @@ class Daemon:
                 retry=False,
             )
             return
-        except Exception as e:  # noqa: BLE001 - never leave a drive stuck in "mounting"
+        except Exception as e:
             log.exception("mounting %s failed", d.name)
             self._mount_failed(d, f"Unexpected error: {e}", "other")
             return
@@ -1183,7 +1188,7 @@ class Daemon:
             await self.rc("vfs/refresh", {"fs": d.mounted_fs}, timeout=120)
             names = await self.fs(_top_dirs, d.mount_point, 60, timeout=20)
             if names and d.mount_state == "mounted":
-                params: Dict[str, Any] = {"fs": d.mounted_fs}
+                params: dict[str, Any] = {"fs": d.mounted_fs}
                 for i, n in enumerate(names):
                     params[f"dir{i}"] = n
                 await self.rc("vfs/refresh", params, timeout=300)
@@ -1305,11 +1310,13 @@ class Daemon:
                     continue
                 try:
                     started = await self._start_sync(f)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     log.exception("could not start sync of %s", f.id)
                     # Shown on the folder, and retried soon: most causes are passing
                     if isinstance(e, OSError):
-                        f.error = f"Can't use {e.filename or f.local}: {e.strerror or e}"
+                        f.error = (
+                            f"Can't use {e.filename or f.local}: {e.strerror or e}"
+                        )
                     elif isinstance(e, asyncio.TimeoutError):
                         f.error = f"{f.local} did not respond"
                     else:
@@ -1338,7 +1345,7 @@ class Daemon:
             await self.fs(lambda p: os.makedirs(p, exist_ok=True), f.local, timeout=10)
         rtype = self.remotes.get(f.remote, {}).get("type", "")
         link = await self.fs(_ensure_link, f.id, f.local, timeout=5)
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "path1": providers.bisync_remote_spec(f.remote, rtype, f.path),
             "path2": link,
             "workdir": str(paths.ensure_private_dir(paths.bisync_dir(f.id))),
@@ -1438,14 +1445,17 @@ class Daemon:
             return
         await self._finish_sync(f, js)
 
-    async def _finish_sync(self, f: Folder, js: Dict[str, Any]) -> None:
+    async def _finish_sync(self, f: Folder, js: dict[str, Any]) -> None:
         group = f"guac/{f.id}"
         changes = 0
         w = self.workers.get(f.id)
         try:
             if w is not None:
                 stats = await self.rc(
-                    "core/stats", {"group": group, "short": True}, timeout=5, client=w.rcc
+                    "core/stats",
+                    {"group": group, "short": True},
+                    timeout=5,
+                    client=w.rcc,
                 )
                 changes = (
                     int(stats.get("transfers", 0))
@@ -1497,7 +1507,10 @@ class Daemon:
             blob = (err + "\n" + text[-6000:]).lower()
             transient = _transient_failure(blob)
             log.warning(
-                "sync %s failed: %s%s", f.id, detail, f" ({transient})" if transient else ""
+                "sync %s failed: %s%s",
+                f.id,
+                detail,
+                f" ({transient})" if transient else "",
             )
             if (
                 "run with --force" in blob
@@ -1650,7 +1663,7 @@ class Daemon:
         except OSError:
             return
         now = time.time()
-        touched: Set[str] = set()
+        touched: set[str] = set()
         for ev in events:
             if ev.mask & IN_Q_OVERFLOW:
                 for f in self.folders.values():
@@ -1715,7 +1728,7 @@ class Daemon:
                 return
             try:
                 await self._tick()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("tick failed")
 
     async def _tick(self) -> None:
@@ -1884,11 +1897,13 @@ class Daemon:
                         int(self.cfg.get("backup_days", 30)),
                         timeout=120,
                     )
-                count = await self.fs(_count_files, str(paths.backup_root()), timeout=20)
+                count = await self.fs(
+                    _count_files, str(paths.backup_root()), timeout=20
+                )
                 if count != self.backup_files:
                     self.backup_files = count
                     self.mark()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("maintenance failed")
 
     def _filters_hash(self) -> str:
@@ -1897,7 +1912,7 @@ class Daemon:
         except OSError:
             return ""
 
-    async def _refresh_quotas(self, now: float, only: Optional[str] = None) -> None:
+    async def _refresh_quotas(self, now: float, only: str | None = None) -> None:
         for name in list(self.remotes):
             if only and name != only:
                 continue
@@ -1958,7 +1973,7 @@ class Daemon:
             (f.local, f.remote, f.path) for f in self.folders.values() if f.initialized
         ]
 
-        def scan() -> List[Dict[str, Any]]:
+        def scan() -> list[dict[str, Any]]:
             groups = [
                 recent.from_vfs_cache(m, dp, mp, n, RECENT_LIMIT)
                 for m, dp, mp, n in drives
@@ -1982,7 +1997,7 @@ class Daemon:
 
     # ------------------------------------------------------------------ state for clients
 
-    def _folder_state(self, f: Folder, now: float) -> Dict[str, Any]:
+    def _folder_state(self, f: Folder, now: float) -> dict[str, Any]:
         if f.paused:
             state = "paused"
         elif f.attention:
@@ -2028,7 +2043,7 @@ class Daemon:
             "watchError": f.watch_error,
         }
 
-    def build_state(self) -> Dict[str, Any]:
+    def build_state(self) -> dict[str, Any]:
         now = time.time()
         drives = []
         folder_count = syncing = attention = uploads = mounted = streaming = 0
@@ -2176,7 +2191,7 @@ class Daemon:
             self.clients.discard(client)
             writer.close()
 
-    async def _dispatch(self, client: Client, msg: Dict[str, Any]) -> None:
+    async def _dispatch(self, client: Client, msg: dict[str, Any]) -> None:
         mid = msg.get("id")
         cmd = str(msg.get("cmd", ""))
         args = msg.get("args") if isinstance(msg.get("args"), dict) else {}
@@ -2226,7 +2241,7 @@ class Daemon:
                 "ok": False,
                 "error": f"Bad request: {e}",
             }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("command %s failed", cmd)
             reply = {
                 "type": "reply",
@@ -2243,13 +2258,13 @@ class Daemon:
                 self.engine_error or "rclone is starting, try again in a moment"
             )
 
-    def _drive(self, args: Dict[str, Any]) -> Drive:
+    def _drive(self, args: dict[str, Any]) -> Drive:
         name = str(args.get("remote", ""))
         if name not in self.remotes or name not in self.drives:
             raise UserError(f"No drive named '{name}'")
         return self.drives[name]
 
-    def _folder(self, args: Dict[str, Any]) -> Folder:
+    def _folder(self, args: dict[str, Any]) -> Folder:
         f = self.folders.get(str(args.get("id", "")))
         if f is None:
             raise UserError("That folder is no longer kept local")
@@ -2257,13 +2272,13 @@ class Daemon:
 
     # --- general
 
-    async def cmd_ping(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_ping(self, args: dict[str, Any]) -> dict[str, Any]:
         return {"pong": True, "version": __version__}
 
-    async def cmd_state(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_state(self, args: dict[str, Any]) -> dict[str, Any]:
         return {"state": self.build_state()}
 
-    async def cmd_touch(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_touch(self, args: dict[str, Any]) -> dict[str, Any]:
         """The panel opened: freshen cheap things now, stale quotas in the background."""
         now = time.time()
         if now - self._recent_at > 10:
@@ -2274,16 +2289,16 @@ class Daemon:
                 q["at"] = 0
         return {}
 
-    async def cmd_shutdown(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_shutdown(self, args: dict[str, Any]) -> dict[str, Any]:
         asyncio.get_running_loop().call_later(0.2, self._stop.set)
         return {"message": "Stopping"}
 
-    async def cmd_restart_engine(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_restart_engine(self, args: dict[str, Any]) -> dict[str, Any]:
         if self.engine and self.engine.returncode is None:
             self.engine.terminate()
         return {"message": "Restarting rclone"}
 
-    async def cmd_log(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_log(self, args: dict[str, Any]) -> dict[str, Any]:
         lines = max(10, min(500, int(args.get("lines", 80))))
         source = str(args.get("source") or "rclone")
         if source not in ("rclone", "daemon"):
@@ -2294,7 +2309,7 @@ class Daemon:
         )
         return {"lines": tail, "path": str(path)}
 
-    async def cmd_set_setting(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_set_setting(self, args: dict[str, Any]) -> dict[str, Any]:
         key = str(args.get("key", ""))
         if key not in config.SETTABLE:
             raise UserError(f"Unknown setting '{key}'")
@@ -2358,7 +2373,7 @@ class Daemon:
 
     # --- streaming
 
-    async def cmd_stream(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_stream(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         on = bool(args.get("on", True))
@@ -2385,7 +2400,7 @@ class Daemon:
             else f"{d.name} is not streaming"
         }
 
-    async def cmd_stream_all(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_stream_all(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         on = bool(args.get("on", True))
         names = list(self.remotes)
@@ -2412,7 +2427,7 @@ class Daemon:
             )
         }
 
-    async def cmd_retry(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_retry(self, args: dict[str, Any]) -> dict[str, Any]:
         d = self._drive(args)
         d.retry_at, d.backoff = 0, 0
         if d.mount_state in ("error", "waiting"):
@@ -2420,7 +2435,7 @@ class Daemon:
         await self.reconcile_drive(d.name, force=True, wait=True)
         return {"message": d.error or f"{d.name}: {d.mount_state}"}
 
-    async def cmd_takeover(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_takeover(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         mp = await self.fs(
@@ -2447,7 +2462,7 @@ class Daemon:
             raise UserError(d.error or "Could not take over the mount")
         return {"message": f"{d.name} is now streamed by Guacamole"}
 
-    async def cmd_set_drive(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_set_drive(self, args: dict[str, Any]) -> dict[str, Any]:
         d = self._drive(args)
         rc = self.remote_cfg(d.name)
         if "label" in args:
@@ -2486,11 +2501,11 @@ class Daemon:
 
     # --- browsing and folders kept local
 
-    async def cmd_browse(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_browse(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         path = clean_remote_path(args.get("path", ""))
-        dirs: Optional[List[str]] = None
+        dirs: list[str] | None = None
         if d.mount_state == "mounted":
             try:
                 dirs = await self.fs(
@@ -2563,7 +2578,7 @@ class Daemon:
             "truncated": len(dirs) >= MAX_BROWSE_ENTRIES,
         }
 
-    async def cmd_folder_size(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_folder_size(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         path = clean_remote_path(args.get("path", ""))
@@ -2613,7 +2628,7 @@ class Daemon:
                     f"That overlaps '{f.path or '/'}' on {remote}, which is already kept local"
                 )
 
-    async def cmd_add_folder(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_add_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         d = self._drive(args)
         rpath = clean_remote_path(args.get("path", ""))
         raw_local = str(args.get("local") or "").strip()
@@ -2658,7 +2673,7 @@ class Daemon:
             )
         return {"id": fid, "local": str(local), "message": msg}
 
-    async def cmd_remove_folder(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_remove_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
         if f.job_id:
             await self._cancel_sync(f)
@@ -2697,7 +2712,7 @@ class Daemon:
         self.mark()
         return {"message": message}
 
-    async def cmd_pause_folder(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_pause_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
         paused = bool(args.get("paused", True))
         for spec in self.remote_cfg(f.remote)["folders"]:
@@ -2711,7 +2726,7 @@ class Daemon:
         self.mark()
         return {"message": "Paused" if paused else "Resumed"}
 
-    async def cmd_sync_now(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_sync_now(self, args: dict[str, Any]) -> dict[str, Any]:
         targets = (
             [self._folder(args)] if args.get("id") else list(self.folders.values())
         )
@@ -2726,7 +2741,7 @@ class Daemon:
         self.mark()
         return {"message": "Syncing now" if targets else "No folders are kept local"}
 
-    async def cmd_resolve(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_resolve(self, args: dict[str, Any]) -> dict[str, Any]:
         """Act on a folder that needs attention: force (apply), resync (restore, never deletes), dismiss."""
         f = self._folder(args)
         action = str(args.get("action", ""))
@@ -2753,7 +2768,7 @@ class Daemon:
             }[action]
         }
 
-    async def cmd_clear_conflicts(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_clear_conflicts(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
         f.conflicts = []
         self._persist_folder(f)
@@ -2762,7 +2777,7 @@ class Daemon:
 
     # --- accounts
 
-    async def cmd_client_guide(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_client_guide(self, args: dict[str, Any]) -> dict[str, Any]:
         """Steps to create an own OAuth client, by provider id or by an existing drive's name."""
         rtype = str(args.get("provider") or "")
         if args.get("remote"):
@@ -2772,7 +2787,7 @@ class Daemon:
             raise UserError("rclone has no own-client setup for this kind of drive")
         return {"guide": guide}
 
-    async def cmd_dismiss_hint(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_dismiss_hint(self, args: dict[str, Any]) -> dict[str, Any]:
         d = self._drive(args)
         code = str(args.get("code") or "")
         if not any(
@@ -2805,7 +2820,7 @@ class Daemon:
         )
         self._auth_proc = proc
         stdout = bytearray()
-        stderr_tail: List[str] = []
+        stderr_tail: list[str] = []
 
         async def read_out() -> None:
             while True:
@@ -2851,7 +2866,7 @@ class Daemon:
             raise UserError("The browser sign-in did not return a token")
         return m.group(0).strip()
 
-    async def _token_extras(self, rtype: str, token: str) -> Dict[str, str]:
+    async def _token_extras(self, rtype: str, token: str) -> dict[str, str]:
         """Settings rclone authorize can't hand back with the token."""
         if rtype == "pcloud":
             # US and EU accounts live on different API hosts; ask pCloud which one this is
@@ -2886,12 +2901,12 @@ class Daemon:
         }
         self.mark()
 
-    async def cmd_cancel_auth(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_cancel_auth(self, args: dict[str, Any]) -> dict[str, Any]:
         if self._auth_proc and self._auth_proc.returncode is None:
             self._auth_proc.terminate()
         return {"message": "Cancelled"}
 
-    async def cmd_dismiss_auth(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_dismiss_auth(self, args: dict[str, Any]) -> dict[str, Any]:
         if not self.auth.get("busy"):
             self.auth = {
                 "busy": False,
@@ -2915,7 +2930,7 @@ class Daemon:
         self.cfg["remotes"][name] = entry
         self.save_cfg()
 
-    async def cmd_add_oauth(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_add_oauth(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         provider_id = str(args.get("provider", ""))
         meta = providers.PROVIDERS.get(provider_id)
@@ -2936,7 +2951,7 @@ class Daemon:
         self._begin_auth(name)
         try:
             token = await self._authorize(rtype, client_id, client_secret)
-            params: Dict[str, Any] = {"token": token, "config_refresh_token": "false"}
+            params: dict[str, Any] = {"token": token, "config_refresh_token": "false"}
             params.update(await self._token_extras(rtype, token))
             if client_id:
                 params["client_id"] = client_id
@@ -2980,7 +2995,7 @@ class Daemon:
             self._end_auth(error=str(e))
             raise
 
-    async def cmd_add_credentials(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_add_credentials(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         provider_id = str(args.get("provider", ""))
         meta = providers.PROVIDERS.get(provider_id)
@@ -2991,7 +3006,7 @@ class Daemon:
             raise UserError(f"A drive named '{name}' already exists")
         opts = args.get("options") if isinstance(args.get("options"), dict) else {}
         o = {k: str(v).strip() for k, v in opts.items() if v is not None}
-        params: Dict[str, str] = {}
+        params: dict[str, str] = {}
         rtype = meta["rclone_type"]
         if provider_id in ("nextcloud", "webdav"):
             url = o.get("url", "")
@@ -3077,7 +3092,7 @@ class Daemon:
             self._end_auth(error=str(e))
             raise
 
-    async def cmd_set_client_id(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_set_client_id(self, args: dict[str, Any]) -> dict[str, Any]:
         """Re-authorize a drive with the user's own OAuth client (fixes shared-client rate limits)."""
         self._need_engine()
         d = self._drive(args)
@@ -3128,7 +3143,7 @@ class Daemon:
             self._end_auth(error=str(e))
             raise
 
-    async def cmd_reconnect(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_reconnect(self, args: dict[str, Any]) -> dict[str, Any]:
         """Run the browser sign-in again for an existing OAuth drive (expired or revoked token)."""
         self._need_engine()
         d = self._drive(args)
@@ -3146,7 +3161,9 @@ class Daemon:
                     "config/update",
                     {
                         "name": d.name,
-                        "parameters": dict(await self._token_extras(rtype, token), token=token),
+                        "parameters": dict(
+                            await self._token_extras(rtype, token), token=token
+                        ),
                         "opt": {"nonInteractive": True},
                     },
                     timeout=60,
@@ -3181,7 +3198,7 @@ class Daemon:
         client_secret = str(conf.get("client_secret", "") or "")
         return await self._authorize(rtype, client_id, client_secret)
 
-    async def cmd_remove_remote(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def cmd_remove_remote(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         for f in [f for f in self.folders.values() if f.remote == d.name]:

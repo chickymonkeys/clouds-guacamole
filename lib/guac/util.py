@@ -4,7 +4,7 @@ import ctypes
 import os
 import re
 import signal
-from typing import Dict, Iterable, List
+from collections.abc import Iterable
 
 _PR_SET_PDEATHSIG = 1
 # Loaded up front: the forked child should only make the prctl call, not load libraries
@@ -93,9 +93,9 @@ def _unescape_mount_field(field: str) -> str:
     return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
-def read_mountinfo() -> Dict[str, Dict[str, str]]:
+def read_mountinfo() -> dict[str, dict[str, str]]:
     """Mount points of this namespace -> {fstype, source}. Reads /proc, never touches the mounts."""
-    mounts: Dict[str, Dict[str, str]] = {}
+    mounts: dict[str, dict[str, str]] = {}
     try:
         with open("/proc/self/mountinfo", "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -186,7 +186,7 @@ def human_bytes(n: float) -> str:
 
 def tail_lines(
     path: os.PathLike, max_lines: int = 80, max_bytes: int = 256 * 1024
-) -> List[str]:
+) -> list[str]:
     """The last lines of a (possibly huge) text file, read from the end only."""
     try:
         with open(path, "rb") as f:

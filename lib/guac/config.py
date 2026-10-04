@@ -6,13 +6,13 @@ import logging
 import os
 import secrets
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import paths
 
 log = logging.getLogger("guac.config")
 
-DEFAULTS: Dict[str, Any] = {
+DEFAULTS: dict[str, Any] = {
     "version": 1,
     # Where cloud drives are streamed (mounted)
     "mount_root": "~/Cloud/Stream",
@@ -95,7 +95,7 @@ def write_json_atomic(path: Path, data: Any) -> None:
     os.replace(tmp, path)
 
 
-def _read_json(path: Path) -> Optional[Any]:
+def _read_json(path: Path) -> Any | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -106,7 +106,7 @@ def _read_json(path: Path) -> Optional[Any]:
         return None
 
 
-def normalize_remote(entry: Any) -> Dict[str, Any]:
+def normalize_remote(entry: Any) -> dict[str, Any]:
     entry = entry if isinstance(entry, dict) else {}
     folders = []
     for f in entry.get("folders") or []:
@@ -131,11 +131,13 @@ def normalize_remote(entry: Any) -> Dict[str, Any]:
         else None,
         "folders": folders,
         # Dismissed suggestions on the drive card (warning codes)
-        "hidden_hints": sorted({str(h) for h in hidden}) if isinstance(hidden, list) else [],
+        "hidden_hints": sorted({str(h) for h in hidden})
+        if isinstance(hidden, list)
+        else [],
     }
 
 
-def load() -> Dict[str, Any]:
+def load() -> dict[str, Any]:
     raw = _read_json(paths.config_file())
     fresh = not isinstance(raw, dict)
     if fresh:
@@ -154,7 +156,7 @@ def load() -> Dict[str, Any]:
     return cfg
 
 
-def save(cfg: Dict[str, Any]) -> None:
+def save(cfg: dict[str, Any]) -> None:
     write_json_atomic(paths.config_file(), cfg)
 
 
@@ -190,7 +192,7 @@ def ensure_filters() -> Path:
     return path
 
 
-def load_state() -> Dict[str, Any]:
+def load_state() -> dict[str, Any]:
     raw = _read_json(paths.state_file())
     state = raw if isinstance(raw, dict) else {}
     state.setdefault("folders", {})
@@ -198,7 +200,7 @@ def load_state() -> Dict[str, Any]:
     return state
 
 
-def save_state(state: Dict[str, Any]) -> None:
+def save_state(state: dict[str, Any]) -> None:
     try:
         write_json_atomic(paths.state_file(), state)
     except OSError as e:

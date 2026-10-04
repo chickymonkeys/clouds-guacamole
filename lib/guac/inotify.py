@@ -4,7 +4,7 @@ import ctypes
 import ctypes.util
 import os
 import struct
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 IN_MODIFY = 0x00000002
 IN_ATTRIB = 0x00000004
@@ -79,8 +79,8 @@ class Inotify:
     def rm_watch(self, wd: int) -> None:
         self._rm(self.fd, wd)
 
-    def read(self) -> List[Event]:
-        events: List[Event] = []
+    def read(self) -> list[Event]:
+        events: list[Event] = []
         while True:
             try:
                 data = os.read(self.fd, 256 * 1024)

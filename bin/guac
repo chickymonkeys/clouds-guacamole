@@ -11,7 +11,7 @@ sys.dont_write_bytecode = True
 _here = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_here), "lib"))
 
-from guac.cli import main  # noqa: E402
+from guac.cli import main
 
 if __name__ == "__main__":
     main()

@@ -7,7 +7,7 @@ All credentials and tokens travel in request bodies on a socket inside the user'
 import http.client
 import json
 import socket
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Bisync returns its whole log on completion; bound what we are willing to hold
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
@@ -26,7 +26,7 @@ class RcUnavailable(RcError):
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, socket_path: str, timeout: Optional[float]):
+    def __init__(self, socket_path: str, timeout: float | None):
         super().__init__("localhost", timeout=timeout)
         self._socket_path = socket_path
 
@@ -44,9 +44,9 @@ class RcClient:
     def call(
         self,
         method: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = 30.0,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        timeout: float | None = 30.0,
+    ) -> dict[str, Any]:
         conn = _UnixHTTPConnection(self.socket_path, timeout)
         try:
             conn.request(
@@ -58,7 +58,7 @@ class RcClient:
             resp = conn.getresponse()
             raw = resp.read(MAX_RESPONSE_BYTES + 1)
             status = resp.status
-        except socket.timeout as e:
+        except TimeoutError as e:
             raise RcError(f"rclone {method} timed out") from e
         except (OSError, http.client.HTTPException) as e:
             raise RcUnavailable(f"rclone is not reachable: {e}") from e

@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from . import __version__, client, config, paths, providers, util
 
@@ -43,7 +43,7 @@ def _ago(ts: float) -> str:
     return f"{d // 86400}d ago"
 
 
-def print_status(state: Dict[str, Any]) -> None:
+def print_status(state: dict[str, Any]) -> None:
     c = _color(sys.stdout.isatty())
     eng = state.get("engine", {})
     print(
@@ -126,10 +126,10 @@ def print_status(state: Dict[str, Any]) -> None:
 
 def _run(
     cmd: str,
-    args: Optional[Dict[str, Any]] = None,
+    args: dict[str, Any] | None = None,
     timeout: float = 600.0,
     quiet: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         conn = client.connect()
     except client.DaemonError as e:
@@ -147,7 +147,7 @@ def _run(
     return reply.get("data") or {}
 
 
-def _state() -> Dict[str, Any]:
+def _state() -> dict[str, Any]:
     try:
         conn = client.connect()
     except client.DaemonError as e:
@@ -185,7 +185,7 @@ def _read_secret(prompt: str) -> str:
     return sys.stdin.readline().strip()
 
 
-def print_client_guide(guide: Dict[str, Any]) -> None:
+def print_client_guide(guide: dict[str, Any]) -> None:
     c = _color(sys.stdout.isatty())
     print(c(BOLD, guide["title"]) + c(DIM, f"  (about {guide['minutes']} minutes)"))
     print(guide["why"])
@@ -200,12 +200,12 @@ def print_client_guide(guide: Dict[str, Any]) -> None:
     print(c(DIM, f"\nrclone's instructions: {guide['docs']}"))
 
 
-def _ask_client(guide: Dict[str, Any]) -> Dict[str, str]:
+def _ask_client(guide: dict[str, Any]) -> dict[str, str]:
     """Prompt for the client id and secret, checking each like the widget does."""
     if not sys.stdin.isatty():
         sys.exit("guac: pass --client-id (the secret is then read from stdin)")
 
-    def ask(spec: Dict[str, Any], secret: bool) -> str:
+    def ask(spec: dict[str, Any], secret: bool) -> str:
         while True:
             prompt = f"{spec['label']}: "
             value = (getpass.getpass(prompt) if secret else input(prompt)).strip()
@@ -220,7 +220,10 @@ def _ask_client(guide: Dict[str, Any]) -> Dict[str, str]:
 
     print()
     try:
-        return {"client_id": ask(guide["id"], False), "client_secret": ask(guide["secret"], True)}
+        return {
+            "client_id": ask(guide["id"], False),
+            "client_secret": ask(guide["secret"], True),
+        }
     except (EOFError, KeyboardInterrupt):
         sys.exit("\nguac: cancelled")
 
@@ -265,7 +268,7 @@ def cmd_service(action: str) -> None:
         print("Removed the systemd unit; the widget will start guacd on demand")
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(
         prog="guac",
         description="Stream cloud drives and keep chosen folders on this device.",
@@ -535,7 +538,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
     elif a.cmd == "set-client-id":
         if a.client_id:
-            creds = {"client_id": a.client_id, "client_secret": _read_secret("OAuth client secret: ")}
+            creds = {
+                "client_id": a.client_id,
+                "client_secret": _read_secret("OAuth client secret: "),
+            }
         else:
             guide = _run("client_guide", {"remote": a.remote}, quiet=True)["guide"]
             print_client_guide(guide)
@@ -573,16 +579,28 @@ def main(argv: Optional[List[str]] = None) -> None:
                 print(json.dumps(settings, indent=2))
     elif a.cmd == "log":
         source = "daemon" if a.daemon else "rclone"
-        for line in _run("log", {"lines": a.lines, "source": source}, quiet=True).get("lines", []):
+        for line in _run("log", {"lines": a.lines, "source": source}, quiet=True).get(
+            "lines", []
+        ):
             print(line)
     elif a.cmd == "open":
         state = _state()
-        target = state.get("cloudRoot") or state.get("mountRoot") or str(paths.expand(config.DEFAULTS["mount_root"]))
+        target = (
+            state.get("cloudRoot")
+            or state.get("mountRoot")
+            or str(paths.expand(config.DEFAULTS["mount_root"]))
+        )
         for d in state.get("drives", []):
             if a.remote and a.remote in (d["name"], d["label"]):
                 target = d["mountPath"]
         # gio launches terminal apps in a terminal; xdg-open (generic mode) does not
-        opener = ["gio", "open"] if shutil.which("gio") else ["xdg-open"] if shutil.which("xdg-open") else None
+        opener = (
+            ["gio", "open"]
+            if shutil.which("gio")
+            else ["xdg-open"]
+            if shutil.which("xdg-open")
+            else None
+        )
         if opener:
             subprocess.Popen(
                 opener + [target],

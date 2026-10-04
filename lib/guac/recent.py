@@ -12,16 +12,16 @@ hundreds of remote API calls and made the file manager hang while it ran.
 
 import heapq
 import os
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 MAX_SCAN_ENTRIES = 20000
 
 
 def _walk_newest(
     root: str, limit: int, budget: int, skip_hidden: bool
-) -> List[Tuple[float, str, int]]:
+) -> list[tuple[float, str, int]]:
     """(mtime, path, size) of the newest files under root, examining at most `budget` entries."""
-    heap: List[Tuple[float, str, int]] = []
+    heap: list[tuple[float, str, int]] = []
     stack = [root]
     while stack and budget > 0:
         directory = stack.pop()
@@ -55,7 +55,7 @@ def _walk_newest(
 
 def from_vfs_cache(
     meta_root: str, data_root: str, mount_point: str, remote: str, limit: int
-) -> List[Dict]:
+) -> list[dict]:
     out = []
     if not meta_root or not os.path.isdir(meta_root):
         return out
@@ -88,7 +88,7 @@ def from_vfs_cache(
 
 def from_local_folder(
     local_root: str, remote: str, remote_path: str, limit: int
-) -> List[Dict]:
+) -> list[dict]:
     out = []
     if not os.path.isdir(local_root):
         return out
@@ -112,7 +112,7 @@ def from_local_folder(
     return out
 
 
-def merge(groups: Iterable[List[Dict]], limit: int) -> List[Dict]:
+def merge(groups: Iterable[list[dict]], limit: int) -> list[dict]:
     seen = set()
     merged = []
     for item in sorted(
