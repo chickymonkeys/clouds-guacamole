@@ -26,6 +26,8 @@ Item {
   signal foldersToggled()
 
   readonly property color dim: Qt.darker(foreground, 1.6)
+  // What the panel scrolls into view when the folders open
+  readonly property Item folderList: folderListItem
   // Everything below the header lines up with the drive's name
   readonly property real badgeSize: Style.space(30)
   readonly property real indent: badgeSize + Style.space(10)
@@ -494,6 +496,7 @@ Item {
 
     // Folders kept on this device, lined up under the drive's name
     FolderList {
+      id: folderListItem
       Layout.fillWidth: true
       Layout.leftMargin: root.indent - Style.space(8)
       folders: root.folders

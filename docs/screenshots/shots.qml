@@ -124,6 +124,14 @@ ShellRoot {
     return shown().filter(function(i) { return i.keepFolderRequested !== undefined && i.drive && i.drive.name === name })[0]
   }
   function scene(name) { svc.request("demo_scene", { name: name }) }
+  function drivesFlick() {
+    return shown().filter(function(i) { return i.flickableDirection !== undefined && i.contentItem && i.model === undefined })[0]
+  }
+  function inView(item) {
+    var f = drivesFlick()
+    var top = item.mapToItem(f.contentItem, 0, 0).y
+    return top >= f.contentY - 1 && top + item.height <= f.contentY + f.height + 1
+  }
 
   function step(desc, fn, delay) { queue.push({ desc: desc, fn: fn, delay: delay === undefined ? 700 : delay }) }
   function shot(name, item) {
@@ -192,6 +200,17 @@ ShellRoot {
       return shown(driveCard("Drive")).filter(function(i) { return i.folder !== undefined && i.folder.name }).map(function(i) {
         return i.folder.name
       }).join() === "Notes"
+    })
+
+    // At the panel's real height, opening a list below the fold scrolls it into view
+    step("real height, Drive's folders open", function() { content.setFoldersOpen("Drive", true); card.cap = Style.space(620) })
+    step("open Dropbox's folders", function() { driveCard("Dropbox").foldersToggled() })
+    step("scrolled into view", function() { return drivesFlick().contentY > 0 && inView(driveCard("Dropbox").folderList) })
+    step("full height again", function() {
+      content.setFoldersOpen("Drive", false)
+      content.setFoldersOpen("Dropbox", false)
+      card.cap = 4000
+      drivesFlick().contentY = 0
     })
 
     // Own client: the card's notice, then the guide

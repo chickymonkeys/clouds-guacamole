@@ -52,6 +52,45 @@ Item {
     openFolderLists = lists
   }
 
+  // A dropdown that opens below the fold is scrolled into view as it grows: just enough to show
+  // all of it, and never so far that its header leaves the top. Scrolling by hand lets go.
+  property Item revealing: null
+
+  function reveal(item) {
+    revealing = item
+    revealTimer.restart()
+    Qt.callLater(keepRevealed)
+  }
+
+  function keepRevealed() {
+    if (!revealing || !revealing.visible) return
+    var f = drivesFlick
+    var margin = Style.space(8)
+    var top = revealing.mapToItem(f.contentItem, 0, 0).y
+    var bottom = top + revealing.height
+    var y = f.contentY
+    if (bottom + margin > y + f.height) y = bottom + margin - f.height
+    if (top - margin < y) y = top - margin
+    f.contentY = Math.max(0, Math.min(Math.max(0, f.contentHeight - f.height), y))
+  }
+
+  // Long enough to follow a dropdown's 140 ms opening, and the panel growing with it
+  Timer {
+    id: revealTimer
+    interval: 400
+    onTriggered: {
+      root.keepRevealed()
+      root.revealing = null
+    }
+  }
+
+  Connections {
+    target: drivesFlick
+    function onContentHeightChanged() { root.keepRevealed() }
+    function onHeightChanged() { root.keepRevealed() }
+    function onMovementStarted() { root.revealing = null }
+  }
+
   function showView(view) {
     // An error belongs to the view it happened in
     service.clearError()
@@ -250,7 +289,11 @@ Item {
             home: root.service.home
             mountRoot: root.service.mountRoot
             foldersOpen: root.openFolderLists[drive.name] === true
-            onFoldersToggled: root.setFoldersOpen(drive.name, !foldersOpen)
+            onFoldersToggled: {
+              var open = !foldersOpen
+              root.setFoldersOpen(drive.name, open)
+              if (open) root.reveal(folderList)
+            }
             // The folder about to be added shows when the panel comes back
             onKeepFolderRequested: function(remote) {
               root.setFoldersOpen(remote, true)
@@ -269,7 +312,9 @@ Item {
         }
 
         RecentFiles {
+          id: recentFiles
           Layout.fillWidth: true
+          onExpandedChanged: if (expanded) root.reveal(recentFiles)
           files: root.service.recent
           foreground: root.foreground
           fontFamily: root.fontFamily
