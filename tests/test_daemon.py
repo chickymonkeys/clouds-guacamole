@@ -176,6 +176,8 @@ def test_busy_unmount(sb: Sandbox) -> None:
 
 
 def test_keep_local_sync(sb: Sandbox) -> None:
+    # Created by guacd at startup, while it also sets up its private socket
+    assert sb.local_root.stat().st_mode & 0o777 == 0o755, "the sync root must be usable"
     data = sb.ok("add_folder", remote="CloudB", path="docs")
     fid, local = data["id"], Path(data["local"])
     wait(lambda: sb.folder(fid)["state"] in ("synced", "changes"), 20, "first sync")

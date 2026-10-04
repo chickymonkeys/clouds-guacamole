@@ -661,13 +661,14 @@ class Daemon:
             sock_path.unlink()
         except FileNotFoundError:
             pass
-        old_umask = os.umask(0o177)
-        try:
-            server = await asyncio.start_unix_server(
-                self._handle_client, path=str(sock_path), limit=CLIENT_LINE_LIMIT
-            )
-        finally:
-            os.umask(old_umask)
+        # Private through its 0700 folder, then by its own mode. Never via os.umask: that is
+        # process-wide, and folders created meanwhile by other threads (the sync root) would
+        # lose their execute bit and refuse every file
+        paths.ensure_private_dir(sock_path.parent)
+        server = await asyncio.start_unix_server(
+            self._handle_client, path=str(sock_path), limit=CLIENT_LINE_LIMIT
+        )
+        os.chmod(sock_path, 0o600)
         return server
 
     async def _shutdown(self) -> None:
