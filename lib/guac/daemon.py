@@ -165,6 +165,7 @@ class Folder:
     watching: bool = False
     watch_error: str = ""
     waiting_network: bool = False
+    rerun: bool = False  # "sync now" was asked while a sync was already running
 
 
 def _prepare_mount_point(path: str) -> None:
@@ -1384,6 +1385,7 @@ class Daemon:
         err = str(js.get("error") or "")
         now = time.time()
         was_resync = bool(f.resync_reason) or not f.initialized
+        rerun, f.rerun = f.rerun, False
         f.job_id, f.progress = 0, {}
         conflicts = _parse_conflicts(text)
         if js.get("success"):
@@ -1392,7 +1394,7 @@ class Daemon:
             f.last_sync, f.last_changes = now, changes
             f.error = f.error_kind = f.attention = f.attention_code = ""
             f.backoff = 0
-            f.next_due = now + self.cfg["sync_interval_min"] * 60
+            f.next_due = now if rerun else now + self.cfg["sync_interval_min"] * 60
             if conflicts:
                 f.conflicts = (
                     conflicts + [c for c in f.conflicts if c not in conflicts]
@@ -2649,6 +2651,8 @@ class Daemon:
                 continue
             f.retry_at, f.backoff, f.next_due = 0, 0, 0
             f.error = ""
+            # The running sync may have looked before the change this is asked for
+            f.rerun = bool(f.job_id)
         self.wake()
         self.mark()
         return {"message": "Syncing now" if targets else "No folders are kept local"}
