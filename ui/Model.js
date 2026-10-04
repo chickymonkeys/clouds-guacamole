@@ -11,7 +11,8 @@ function formatBytes(bytes) {
     b /= 1024
     i++
   }
-  return (i === 0 ? b.toFixed(0) : b.toFixed(1)) + " " + units[i]
+  // 100 GB, not 100.0 GB
+  return (i === 0 ? b.toFixed(0) : b.toFixed(1).replace(/\.0$/, "")) + " " + units[i]
 }
 
 function formatSpeed(bps) {
