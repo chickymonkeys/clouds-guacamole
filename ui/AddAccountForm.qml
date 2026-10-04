@@ -110,7 +110,7 @@ Item {
       spacing: Style.space(8)
 
       Button {
-        iconText: "󰁝"
+        iconText: "󰁍"
         text: root.selectedProvider ? "Providers" : "Back"
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
