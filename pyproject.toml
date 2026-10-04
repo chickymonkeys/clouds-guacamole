@@ -11,8 +11,8 @@ extend-include = ["bin/guac"]
 
 [tool.ty.environment]
 python-version = "3.10"
-# bin/guac and the tests import the guac package from lib/
+# bin/guac, the tests and the screenshot renderer import the guac package from lib/
 extra-paths = ["lib"]
 
 [tool.ty.src]
-include = ["lib", "tests", "bin/guac"]
+include = ["lib", "tests", "docs", "bin/guac"]

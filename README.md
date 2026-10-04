@@ -7,6 +7,10 @@ An Omarchy bar widget and background service, built on [rclone](https://rclone.o
 
 It works with Google Drive, Dropbox, Microsoft OneDrive, Box, pCloud, Nextcloud and ownCloud, WebDAV, S3-compatible storage (AWS, MinIO, Cloudflare R2), Proton Drive, and any remote you have already set up with rclone.
 
+<p align="center">
+  <img src="docs/images/panel.png" width="430" alt="The Clouds Guacamole panel: Google Drive and Dropbox streaming with their quotas, three folders kept on this device with one syncing (progress, current file and speed), two files uploading, Nextcloud not streaming, and recent files">
+</p>
+
 ```
 ~/Cloud/
 ├── Stream/                  one folder per drive, streamed on demand
@@ -33,6 +37,17 @@ On a drive card, choose **Keep a folder on this device**, browse to a folder and
 - **Replaced local files are kept** for 30 days under `~/.local/state/guacamole/backups/` (Settings → Engine → Backups).
 - Editor temp files, `.DS_Store`, `Thumbs.db`, Obsidian's per-device `workspace.json` and similar files are never synced. The list is in `~/.config/guacamole/filters.txt` (Settings → Engine → Filters).
 
+<table>
+  <tr>
+    <td valign="top" width="50%"><img src="docs/images/keep-folder.png" width="400" alt="Keep a folder on this device: browsing Drive, Documents, Papers, with its size (2.7 GB in 1284 files) and the local folder it will be kept in"></td>
+    <td valign="top" width="50%"><img src="docs/images/conflicts.png" width="400" alt="A folder with two conflicts, both versions kept, and a Dropbox folder stopped by the safety stop, offering Resync, Sync anyway and Dismiss"></td>
+  </tr>
+  <tr>
+    <td align="center">Choosing a folder to keep</td>
+    <td align="center">Conflicts and the safety stop</td>
+  </tr>
+</table>
+
 Under the hood this is `rclone bisync` with `--resilient --recover`, `--conflict-resolve newer`, a 50% max-delete threshold and a local backup directory. Google Docs files are skipped, since they have no real size and can't round-trip.
 
 Streaming and keeping folders are independent: a drive can be streamed, have local folders, both, or neither. A folder you keep is also visible inside the streamed drive. Work in the local copy; edits made through the stream reach it on the next sync.
@@ -42,6 +57,17 @@ Streaming and keeping folders are independent: a drive can be streamed, have loc
 Google Drive, Dropbox, OneDrive, Box and pCloud sign in through rclone's built-in OAuth client unless you give them your own. That built-in client is shared by every rclone user, so the providers throttle it. For Google Drive it is also being retired: **it stops working during 2026, so Google Drive needs a client of your own.**
 
 Guacamole walks you through creating one, step by step, the same way for every one of these providers. The steps follow rclone's own documentation (pCloud's developer site for pCloud, which rclone doesn't cover). Each step has a button that opens the right console page and a copy button for the values to paste. At the end you paste the client ID and secret and sign in. The widget checks the format of what you paste, so a secret in the ID field or a OneDrive *Secret ID* instead of its *Value* is caught before signing in.
+
+<table>
+  <tr>
+    <td valign="top" width="50%"><img src="docs/images/client-guide.png" width="400" alt="Step 4 of 6 of the Google client guide: a button that opens the Data access page and the Drive scopes with a Copy button"></td>
+    <td valign="top" width="50%"><img src="docs/images/client-paste.png" width="400" alt="The last step: the pasted client ID and secret, a note about Google's unverified-app screen, and Sign in with my client"></td>
+  </tr>
+  <tr>
+    <td align="center">Each step opens the right page and copies the values</td>
+    <td align="center">Paste the client, then sign in</td>
+  </tr>
+</table>
 
 - When adding any of these drives, the own-client setup is on by default (it can be switched off, except that Google Drive then warns it will stop working).
 - On an existing drive, use **Set up** on the card's notice, or the drive editor (󰏫 → *Set up my own client*). A drive that gets rate-limited offers it too.
@@ -90,6 +116,8 @@ Remotes already in your rclone config appear as drives right away, not streamed 
 
 ## The widget
 
+<p><img src="docs/images/bar-states.png" width="506" alt="The bar icon: a green filled cloud when all is good, a spinner while files move, an amber outline when offline or not streaming, and red with a dot when something needs you"></p>
+
 - **Bar icon.** Green when everything you asked for is healthy. Yellow when nothing is streaming or you're offline. Red with a dot when something needs you. It spins while files move. Left-click opens the panel, right-click syncs local folders now, middle-click streams or stops all drives.
 - **Panel keys.** `a` add a drive, `s` settings, `r` sync now, `m` stream or stop all, `o` open `~/Cloud`, `Esc` back or close.
 - **Drive cards.** Each card shows:
@@ -103,6 +131,17 @@ Remotes already in your rclone config appear as drives right away, not streamed 
   - *Log*, an in-panel viewer for Guacamole's and rclone's logs, with a problems-only filter, copy and open;
   - *Filters*, which opens `filters.txt` in your editor;
   - *Backups*, the local files syncs replaced or deleted (it says so when there are none yet).
+
+<table>
+  <tr>
+    <td valign="top" width="50%"><img src="docs/images/add-drive.png" width="400" alt="Connect a cloud drive: Google Drive, Microsoft OneDrive, Dropbox, Nextcloud or ownCloud, S3, MinIO or R2, Box, pCloud, Proton Drive and WebDAV"></td>
+    <td valign="top" width="50%"><img src="docs/images/settings.png" width="400" alt="Settings: stream and sync locations, cache size, sync interval, backup retention, notifications, and the Engine row with Restart, Log, Filters and Backups"></td>
+  </tr>
+  <tr>
+    <td align="center">Add Drive</td>
+    <td align="center">Settings</td>
+  </tr>
+</table>
 
 ## Command line
 
@@ -167,6 +206,8 @@ The Python code is formatted and checked with [ruff](https://docs.astral.sh/ruff
 ```bash
 ruff format && ruff check && ty check
 ```
+
+The screenshots in `docs/images` come from `docs/screenshots/render.py`, which runs the real widget off-screen against a demo `guacd` with made-up drives and folders (it needs Quickshell and the Omarchy shell).
 
 ## License
 
