@@ -74,6 +74,24 @@ Item {
     f.contentY = Math.max(0, Math.min(Math.max(0, f.contentHeight - f.height), y))
   }
 
+  // Arrow keys and j/k: a few lines at a time, in whichever view is showing
+  function scrollBy(steps) {
+    var f = currentView === "drives" ? drivesFlick : panelFlick
+    var maxY = Math.max(0, f.contentHeight - f.height)
+    if (maxY <= 0) return
+    revealing = null
+    scrollAnim.target = f
+    scrollAnim.to = Math.max(0, Math.min(maxY, (scrollAnim.running ? scrollAnim.to : f.contentY) + steps * Style.space(56)))
+    scrollAnim.restart()
+  }
+
+  NumberAnimation {
+    id: scrollAnim
+    property: "contentY"
+    duration: 140
+    easing.type: Easing.OutCubic
+  }
+
   // Long enough to follow a dropdown's 140 ms opening, and the panel growing with it
   Timer {
     id: revealTimer
