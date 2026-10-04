@@ -1,0 +1,18 @@
+# Settings for the code tools only: Clouds Guacamole is an Omarchy plugin, not a Python package.
+#   uv tool install ruff ty
+#   ruff format && ruff check && ty check
+
+[tool.ruff]
+# 0.16 enabled the broader default rule set the code is checked against
+required-version = ">=0.16"
+target-version = "py310"
+# The CLI launcher has no .py extension
+extend-include = ["bin/guac"]
+
+[tool.ty.environment]
+python-version = "3.10"
+# bin/guac, the tests and the screenshot renderer import the guac package from lib/
+extra-paths = ["lib"]
+
+[tool.ty.src]
+include = ["lib", "tests", "docs", "bin/guac"]
