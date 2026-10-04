@@ -119,7 +119,7 @@ Remotes already in your rclone config appear as drives right away, not streamed 
 <p><img src="docs/images/bar-states.png" width="506" alt="The bar icon: a green filled cloud when all is good, a spinner while files move, an amber outline when offline or not streaming, and red with a dot when something needs you"></p>
 
 - **Bar icon.** Green when everything you asked for is healthy. Yellow when nothing is streaming or you're offline. Red with a dot when something needs you. It spins while files move. Left-click opens the panel, right-click syncs local folders now, middle-click streams or stops all drives.
-- **Panel.** The header says the one thing worth knowing now: what needs you, syncing with its speed, offline, or up to date. The footer has *Add drive* and buttons to sync local folders now, open `~/Cloud` and open Settings. Keys: `a` add a drive, `s` settings, `r` sync now, `m` stream or stop all, `o` open `~/Cloud`, `Esc` back or close.
+- **Panel.** The header says the one thing worth knowing now: what needs you, syncing with its speed, offline, or up to date. The footer has *Add drive* and buttons to sync local folders now, open `~/Cloud` and open Settings. Drives and recent files scroll as one list, and opening a dropdown scrolls it into view. Keys: `a` add a drive, `s` settings, `r` sync now, `m` stream or stop all, `o` open `~/Cloud`, `↑` `↓` or `j` `k` scroll, `Esc` back or close.
 - **Drive cards.** Each card shows:
   - a streaming switch, and one line with the drive's quota and files still uploading, or its state when it isn't streaming;
   - problems, with a one-click fix: *Retry*, *Reconnect account*, *Take over*, *Set up my own client*;
