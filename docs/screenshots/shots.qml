@@ -170,9 +170,10 @@ ShellRoot {
       return true
     })
     step("full height", function() { card.cap = 4000; return true })
+    step("Drive's folders open", function() { content.setFoldersOpen("Drive", true) })
     shot("panel")
 
-    step("attention scene", function() { scene("attention") }, 1200)
+    step("attention scene", function() { scene("attention"); content.setFoldersOpen("Drive", false) }, 1200)
     step("recent collapsed", function() {
       var rf = byProp("files")
       shown(rf).filter(function(i) { return i.cursorShape !== undefined && typeof i.clicked === "function" })[0].clicked(null)
@@ -180,10 +181,18 @@ ShellRoot {
     })
     shot("conflicts")
 
-    // Many folders on one drive: folded down to the ones that need you
+    // Many folders on one drive: closed down to the one that needs a look, then open
     step("many-folders scene", function() { scene("many") }, 1200)
-    step("folded", function() { return driveCard("Drive").folded === true })
-    shot("many-folders")
+    step("closed", function() { return driveCard("Drive").foldersOpen === false })
+    shot("folder-list")
+    step("open", function() { content.setFoldersOpen("Drive", true) })
+    shot("folder-list-open")
+    step("closed again", function() { content.setFoldersOpen("Drive", false) })
+    step("only the conflicted folder still listed", function() {
+      return shown(driveCard("Drive")).filter(function(i) { return i.folder !== undefined && i.folder.name }).map(function(i) {
+        return i.folder.name
+      }).join() === "Notes"
+    })
 
     // Own client: the card's notice, then the guide
     step("shared-client scene", function() { scene("shared") }, 1200)

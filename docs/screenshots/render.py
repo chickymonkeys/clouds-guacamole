@@ -213,7 +213,7 @@ def scene(name: str):
             nextcloud,
         ]
     elif name == "many":
-        # One drive keeping nine folders: folded down to the ones that need you
+        # One drive keeping nine folders: its list closes down to the one that needs a look
         kept = [
             folder("Drive", p, f"b{i:07x}", lastSync=ago(60 * (i + 2)))
             for i, p in enumerate(

@@ -8,7 +8,7 @@ An Omarchy bar widget and background service, built on [rclone](https://rclone.o
 It works with Google Drive, Dropbox, Microsoft OneDrive, Box, pCloud, Nextcloud and ownCloud, WebDAV, S3-compatible storage (AWS, MinIO, Cloudflare R2), Proton Drive, and any remote you have already set up with rclone.
 
 <p align="center">
-  <img src="docs/images/panel.png" width="430" alt="The Clouds Guacamole panel: Google Drive and Dropbox streaming with their quotas, three folders kept on this device with one syncing (progress, current file and speed), two files uploading, Nextcloud not streaming, and recent files">
+  <img src="docs/images/panel.png" width="430" alt="The Clouds Guacamole panel: Google Drive and Dropbox streaming with their quotas, Drive's two local folders listed with one syncing (progress, current file and speed), Dropbox's folder closed to one line, two files uploading, Nextcloud not streaming, and recent files">
 </p>
 
 ```
@@ -28,7 +28,7 @@ Turn on a drive's switch and it is mounted at `~/Cloud/Stream/<Drive>`. Browsing
 
 ## Keep folders on this device
 
-On a drive card, choose **Keep a folder on this device**, browse to a folder and confirm. It is downloaded to `~/Cloud/Sync/<Drive>/<path>`, or anywhere else you pick. From then on:
+On a drive card, open **Local folders** and choose **Keep a folder on this device** (a drive with none shows it right away), browse to a folder and confirm. It is downloaded to `~/Cloud/Sync/<Drive>/<path>`, or anywhere else you pick. From then on:
 
 - **Local edits reach the cloud within about 5 seconds.** The service watches the folder and syncs once you stop typing.
 - **Cloud edits arrive on a timer** (every 5 minutes by default). They also arrive when you click 󰑐, right after resume from suspend, and when the network comes back.
@@ -40,7 +40,7 @@ On a drive card, choose **Keep a folder on this device**, browse to a folder and
 <table>
   <tr>
     <td valign="top" width="50%"><img src="docs/images/keep-folder.png" width="400" alt="Keep a folder on this device: browsing Drive, Documents, Papers, with its size (2.7 GB in 1284 files) and the local folder it will be kept in"></td>
-    <td valign="top" width="50%"><img src="docs/images/conflicts.png" width="400" alt="A folder with two conflicts, both versions kept, and a Dropbox folder stopped by the safety stop, offering Resync, Sync anyway and Dismiss"></td>
+    <td valign="top" width="50%"><img src="docs/images/conflicts.png" width="400" alt="With both drives' folder lists closed, the folders that need a look stay listed: one with two conflicts, both versions kept, and a Dropbox folder stopped by the safety stop, offering Resync, Sync anyway and Dismiss"></td>
   </tr>
   <tr>
     <td align="center">Choosing a folder to keep</td>
@@ -124,17 +124,24 @@ Remotes already in your rclone config appear as drives right away, not streamed 
   - a streaming switch, and one line with the drive's quota and files still uploading, or its state when it isn't streaming;
   - problems, with a one-click fix: *Retry*, *Reconnect account*, *Take over*, *Set up my own client*;
   - rename, move, your own client and remove, behind 󰇘;
-  - its local folders, one line each with their state. Hover a folder for *Sync now*, *Open*, *Pause* and *Stop*, and its name for where it syncs. Progress, conflicts and anything that needs you show under it.
-- **Many folders.** Past three, a drive's folders fold into one line that says what they are doing; click it to list them all. Folders that need you, and new ones still on their first download, stay listed.
+  - its local folders, in a dropdown.
+- **Local folders.** A drive's folders sit behind one line with how many there are and what they are doing: *all synced*, *2 syncing*, *1 needs you*. Click it to list them, one line each with its state. Hover a folder for *Sync now*, *Open*, *Pause* and *Stop*, and its name for where it syncs. Progress, conflicts and anything that needs you show under it. Folders with conflicts or a problem stay listed while the list is closed, so nothing that needs you is behind a click. The panel remembers which lists you opened, and adding a folder opens its drive's list.
 - **Settings.** Stream and sync locations, cache size, sync interval, backup retention and notifications. The **Engine** row has:
   - *Restart* (rclone);
   - *Log*, an in-panel viewer for Guacamole's and rclone's logs, with a problems-only filter, copy and open;
   - *Filters*, which opens `filters.txt` in your editor;
   - *Backups*, the local files syncs replaced or deleted (it says so when there are none yet).
 
-<p align="center">
-  <img src="docs/images/many-folders.png" width="400" alt="A drive keeping nine folders, folded: a folder with a conflict and a new one on its first download stay listed, and the other seven fold into one line saying one of them is syncing">
-</p>
+<table>
+  <tr>
+    <td valign="top" width="50%"><img src="docs/images/folder-list.png" width="400" alt="Drive keeping nine folders with its list closed: one line saying 9 local folders, 2 syncing, and the folder with a conflict still listed under it. Dropbox's folder is closed to one line too"></td>
+    <td valign="top" width="50%"><img src="docs/images/folder-list-open.png" width="400" alt="The same list open: nine folders one line each, two of them syncing with their progress, current file and speed, then Keep a folder on this device"></td>
+  </tr>
+  <tr>
+    <td align="center">Local folders, closed</td>
+    <td align="center">Local folders, open</td>
+  </tr>
+</table>
 
 <table>
   <tr>
