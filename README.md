@@ -59,10 +59,11 @@ Nextcloud, WebDAV, S3 and Proton Drive have no OAuth client to create. Except on
 
 ## Why it stays fast
 
-- **One long-running service.** `guacd` runs a single `rclone rcd` that hosts every mount and sync job. The widget keeps one socket open and the service **pushes** changes, so nothing is polled and no process starts when the panel opens: it shows current data instantly.
+- **One long-running service.** `guacd` runs one `rclone rcd` that hosts every mount, and gives each running sync its own short-lived rclone process. The widget keeps one socket open and the service **pushes** changes, so nothing is polled and no process starts when the panel opens: it shows current data instantly.
 - **Opening the panel never touches the network.** Recent files come from rclone's local cache records and from your local folders. Quotas refresh in the background.
 - **Nothing blocks on a stalled mount.** The service never probes a mount on the main path; health comes from rclone's API and `/proc`, and the few unavoidable filesystem calls run on separate threads with timeouts. rclone itself gives up on a dead connection after 60 seconds.
 - **Drives mount in parallel**, and mounting returns as soon as the mount is up.
+- **Folders sync in parallel**, up to three at once, including several folders of the same drive. Each sync runs in its own rclone process, so its log, conflicts and errors are never mixed up with another folder's.
 - **Tuned caching.** On backends that report changes (Google Drive, Dropbox, OneDrive, Box), folder listings stay cached for days and are refreshed by change notifications every 30 seconds. After mounting, the first two folder levels are prefetched in the background, so the file manager opens instantly.
 
 ## Install
@@ -155,7 +156,7 @@ tests/test_daemon.py   # end-to-end: real FUSE mounts and bisync on throwaway lo
 The end-to-end suite runs `guacd` against two local rclone `alias` remotes in temporary directories, with its own rclone config. It covers:
 
 - streaming and write-through, busy unmount, cleanup of empty mount folders;
-- keeping folders local: syncing in both directions, deletions, conflicts, the safety stop and resync;
+- keeping folders local: syncing in both directions, deletions, conflicts, the safety stop and resync, and folders of one drive syncing in parallel;
 - recent files;
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;

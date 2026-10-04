@@ -1,8 +1,9 @@
 """guacd: the Clouds Guacamole background service.
 
 One long-running process per user that:
-  * runs a single `rclone rcd` hosting every mount and sync job, talking to it over a private
-    unix socket (no rclone process is ever spawned for a status check);
+  * runs one `rclone rcd` hosting every mount, plus a short-lived `rclone rcd` per running sync,
+    talking to them over private unix sockets (no rclone process is ever spawned for a status
+    check);
   * streams drives with a tuned VFS cache and keeps chosen folders on this device with
     `bisync`, triggered by local changes (inotify), a timer, and resume-from-suspend;
   * pushes state to the bar widget over its own unix socket only when something changed.
@@ -53,7 +54,7 @@ TICK_BACKGROUND = 10.0  # nobody watching
 QUOTA_TTL = 30 * 60
 RECENT_TTL = 60
 RECENT_LIMIT = 12
-MAX_SYNC_JOBS = 2
+MAX_SYNC_JOBS = 3  # folders syncing at once, each in its own rclone process
 DEBOUNCE = 4.0  # quiet time after a local change before syncing it
 FOLLOWUP_DEBOUNCE = 10.0  # changes seen while a sync ran (mostly its own writes)
 MAX_DIRTY_WAIT = 30.0  # never hold local changes back longer than this
@@ -165,7 +166,21 @@ class Folder:
     watching: bool = False
     watch_error: str = ""
     waiting_network: bool = False
+    moving: List[str] = field(default_factory=list)  # files the running sync is transferring
     rerun: bool = False  # "sync now" was asked while a sync was already running
+
+
+@dataclass
+class SyncWorker:
+    """The rclone process running one folder's bisync.
+
+    bisync captures its log by redirecting rclone's global logger, so two bisyncs in one process
+    mix their output (conflicts and errors land on the wrong folder) and can leave the log file
+    pointing at a finished job's buffer. One process per running sync keeps each output its own.
+    """
+
+    proc: asyncio.subprocess.Process
+    rcc: RcClient
 
 
 def _prepare_mount_point(path: str) -> None:
@@ -428,6 +443,7 @@ class Daemon:
         # Filesystem probes get their own pool: a hung FUSE stat must never starve rc calls
         self.fs_pool = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="fs")
         self.engine: Optional[asyncio.subprocess.Process] = None
+        self.workers: Dict[str, SyncWorker] = {}  # folder id -> rclone running its sync
         self.engine_state = "starting"
         self.engine_error = ""
         self.rclone_version = ""
@@ -487,10 +503,12 @@ class Daemon:
         method: str,
         params: Optional[Dict[str, Any]] = None,
         timeout: float = 30.0,
+        client: Optional[RcClient] = None,
     ) -> Dict[str, Any]:
+        """Call the engine, or with client, the rclone process running a sync."""
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(
-            self.rc_pool, self.rcc.call, method, params or {}, timeout
+            self.rc_pool, (client or self.rcc).call, method, params or {}, timeout
         )
         try:
             return await asyncio.wait_for(fut, timeout + 5)
@@ -673,28 +691,11 @@ class Daemon:
         return server
 
     async def _shutdown(self) -> None:
+        await asyncio.gather(
+            *(self._cancel_sync(f) for f in list(self.folders.values()) if f.job_id)
+        )
+        await asyncio.gather(*(self._stop_worker(fid) for fid in list(self.workers)))
         if self.engine_state == "running":
-            for f in list(self.folders.values()):
-                if f.job_id:
-                    try:
-                        await self.rc("job/stop", {"jobid": f.job_id}, timeout=5)
-                    except RcError:
-                        pass
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline and any(
-                f.job_id for f in self.folders.values()
-            ):
-                for f in list(self.folders.values()):
-                    if f.job_id:
-                        try:
-                            js = await self.rc(
-                                "job/status", {"jobid": f.job_id}, timeout=3
-                            )
-                            if js.get("finished"):
-                                f.job_id = 0
-                        except RcError:
-                            f.job_id = 0
-                await asyncio.sleep(0.3)
             for d in list(self.drives.values()):
                 if d.mount_state == "mounted":
                     try:
@@ -715,6 +716,53 @@ class Daemon:
         self._persist_all_folders()
 
     # ------------------------------------------------------------------ rclone engine
+
+    async def _start_worker(self, f: Folder) -> SyncWorker:
+        sock = paths.sync_socket(f.id)
+        try:
+            sock.unlink()
+        except FileNotFoundError:
+            pass
+        rcc = RcClient(str(sock))
+        w = SyncWorker(await self._launch_rcd(sock, rcc, []), rcc)
+        self.workers[f.id] = w
+        return w
+
+    async def _stop_worker(self, fid: str) -> None:
+        w = self.workers.pop(fid, None)
+        if w is None:
+            return
+        if w.proc.returncode is None:
+            # SIGTERM runs rclone's normal exit path at once; core/quit waits 1.5s first
+            w.proc.terminate()
+            try:
+                await asyncio.wait_for(w.proc.wait(), 5)
+            except asyncio.TimeoutError:
+                w.proc.kill()
+                await w.proc.wait()
+        try:
+            paths.sync_socket(fid).unlink()
+        except OSError:
+            pass
+
+    async def _cancel_sync(self, f: Folder, wait: float = 10.0) -> None:
+        """Stop a running sync, give bisync a moment to wind down, then end its rclone."""
+        w = self.workers.get(f.id)
+        if f.job_id and w is not None:
+            try:
+                await self.rc("job/stop", {"jobid": f.job_id}, timeout=5, client=w.rcc)
+                deadline = time.monotonic() + wait
+                while time.monotonic() < deadline:
+                    js = await self.rc(
+                        "job/status", {"jobid": f.job_id}, timeout=3, client=w.rcc
+                    )
+                    if js.get("finished"):
+                        break
+                    await asyncio.sleep(0.2)
+            except RcError:
+                pass
+        f.job_id, f.progress, f.moving = 0, {}, []
+        await self._stop_worker(f.id)
 
     async def _supervise_engine(self) -> None:
         delay = 1.0
@@ -779,6 +827,30 @@ class Daemon:
                 sock.unlink()
             except OSError:
                 pass
+        self.engine = await self._launch_rcd(
+            sock,
+            self.rcc,
+            [
+                "--rc-job-expire-duration=10m",
+                "--rc-job-expire-interval=1m",
+                # Only the engine rotates the shared log; sync processes just append to it
+                "--log-file-max-size=5M",
+                "--log-file-max-backups=1",
+            ],
+        )
+        try:
+            ver = await self.rc("core/version", timeout=5)
+            self.rclone_version = str(ver.get("version", ""))
+            cp = await self.rc("config/paths", timeout=5)
+            self.rclone_config_path = str(cp.get("config", ""))
+        except RcError:
+            pass
+        log.info("rclone %s ready", self.rclone_version)
+
+    async def _launch_rcd(
+        self, sock: Path, rcc: RcClient, extra: List[str]
+    ) -> asyncio.subprocess.Process:
+        """Start an `rclone rcd` on sock and wait until it answers."""
         log_path = paths.rclone_log()
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         args = [
@@ -786,12 +858,8 @@ class Daemon:
             "rcd",
             f"--rc-addr=unix://{sock}",
             "--rc-no-auth",
-            "--rc-job-expire-duration=10m",
-            "--rc-job-expire-interval=1m",
             f"--log-file={log_path}",
             "--log-level=INFO",
-            "--log-file-max-size=5M",
-            "--log-file-max-backups=1",
             "--ask-password=false",
             "--stats=0",
             "--fast-list",
@@ -802,9 +870,10 @@ class Daemon:
             "--contimeout=15s",
             "--low-level-retries=5",
             "--use-mmap",
+            *extra,
         ]
         try:
-            self.engine = await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -816,25 +885,15 @@ class Daemon:
         deadline = time.monotonic() + 20
         loop = asyncio.get_running_loop()
         while True:
-            if self.engine.returncode is not None:
+            if proc.returncode is not None:
                 tail = " ".join(util.tail_lines(log_path, 3))
                 raise RuntimeError(f"rclone exited during startup: {tail}")
-            if sock.exists() and await loop.run_in_executor(
-                self.rc_pool, self.rcc.ping, 1.0
-            ):
-                break
+            if sock.exists() and await loop.run_in_executor(self.rc_pool, rcc.ping, 1.0):
+                return proc
             if time.monotonic() > deadline:
-                self.engine.kill()
+                proc.kill()
                 raise RuntimeError("rclone did not start in time")
             await asyncio.sleep(0.05)
-        try:
-            ver = await self.rc("core/version", timeout=5)
-            self.rclone_version = str(ver.get("version", ""))
-            cp = await self.rc("config/paths", timeout=5)
-            self.rclone_config_path = str(cp.get("config", ""))
-        except RcError:
-            pass
-        log.info("rclone %s ready", self.rclone_version)
 
     async def _after_engine_start(self) -> None:
         await self.load_remotes()
@@ -842,15 +901,11 @@ class Daemon:
             self._spawn(self.reconcile_drive(name, force=True))
 
     def _on_engine_lost(self) -> None:
+        # Syncs run in their own rclone processes and carry on
         for d in self.drives.values():
             if d.mount_state in ("mounted", "mounting", "unmounting"):
                 d.mount_state = "off"
                 d.retry_at = 0
-        for f in self.folders.values():
-            if f.job_id:
-                f.job_id = 0
-                f.progress = {}
-                f.retry_at = time.time() + 5
 
     def _rclone_conf_signature(self) -> Any:
         try:
@@ -1226,8 +1281,9 @@ class Daemon:
             if self.engine_state != "running":
                 continue
             now = time.time()
+            # Kept folders never overlap (see _validate_local) and each sync has its own rclone
+            # process, so folders of the same drive sync side by side
             running = [f for f in self.folders.values() if f.job_id]
-            busy = {f.remote for f in running}
             # Local edits first, then never-synced folders, then routine checks
             order = sorted(
                 self.folders.values(),
@@ -1236,7 +1292,7 @@ class Daemon:
             for f in order:
                 if len(running) >= MAX_SYNC_JOBS:
                     break
-                if f.remote in busy or not self._folder_due(f, now):
+                if not self._folder_due(f, now):
                     continue
                 # Only hold back after a real network failure: the route check alone can be wrong
                 if not self.online and f.error_kind == "network":
@@ -1264,7 +1320,6 @@ class Daemon:
                     started = False
                 if started:
                     running.append(f)
-                    busy.add(f.remote)
 
     async def _start_sync(self, f: Folder) -> bool:
         now = time.time()
@@ -1311,7 +1366,12 @@ class Daemon:
             params["resyncMode"] = "newer"
         if f.force_next:
             params["force"] = True
-        res = await self.rc("sync/bisync", params, timeout=30)
+        worker = await self._start_worker(f)
+        try:
+            res = await self.rc("sync/bisync", params, timeout=30, client=worker.rcc)
+        except Exception:
+            await self._stop_worker(f.id)
+            raise
         f.job_id = int(res.get("jobid", 0))
         f.job_started = now
         f.progress = {}
@@ -1335,18 +1395,31 @@ class Daemon:
 
     async def _poll_job(self, f: Folder) -> None:
         group = f"guac/{f.id}"
-        try:
-            js = await self.rc("job/status", {"jobid": f.job_id}, timeout=5)
-        except RcError as e:
-            if "not found" in str(e).lower():
-                f.job_id, f.progress, f.retry_at = 0, {}, time.time() + 5
-                self.mark()
+        w = self.workers.get(f.id)
+        lost = w is None or w.proc.returncode is not None
+        if not lost:
+            try:
+                js = await self.rc(
+                    "job/status", {"jobid": f.job_id}, timeout=5, client=w.rcc
+                )
+            except RcError as e:
+                lost = "not found" in str(e).lower() or isinstance(e, RcUnavailable)
+                if not lost:
+                    return
+        if lost:
+            log.warning("sync %s lost its rclone process; retrying", f.id)
+            await self._stop_worker(f.id)
+            f.job_id, f.progress, f.moving, f.retry_at = 0, {}, [], time.time() + 5
+            self.mark()
             return
         if not js.get("finished"):
             try:
-                stats = await self.rc("core/stats", {"group": group}, timeout=5)
+                stats = await self.rc(
+                    "core/stats", {"group": group}, timeout=5, client=w.rcc
+                )
             except RcError:
                 return
+            f.moving = [str(t.get("name", "")) for t in stats.get("transferring") or []]
             current = (stats.get("transferring") or [{}])[0]
             progress = {
                 "bytes": int(stats.get("bytes", 0)),
@@ -1368,18 +1441,21 @@ class Daemon:
     async def _finish_sync(self, f: Folder, js: Dict[str, Any]) -> None:
         group = f"guac/{f.id}"
         changes = 0
+        w = self.workers.get(f.id)
         try:
-            stats = await self.rc(
-                "core/stats", {"group": group, "short": True}, timeout=5
-            )
-            changes = (
-                int(stats.get("transfers", 0))
-                + int(stats.get("deletes", 0))
-                + int(stats.get("renames", 0))
-            )
-            await self.rc("core/stats-delete", {"group": group}, timeout=5)
+            if w is not None:
+                stats = await self.rc(
+                    "core/stats", {"group": group, "short": True}, timeout=5, client=w.rcc
+                )
+                changes = (
+                    int(stats.get("transfers", 0))
+                    + int(stats.get("deletes", 0))
+                    + int(stats.get("renames", 0))
+                )
         except RcError:
             pass
+        await self._stop_worker(f.id)
+        f.moving = []
         out = js.get("output")
         text = str(out.get("output", "")) if isinstance(out, dict) else ""
         err = str(js.get("error") or "")
@@ -1737,13 +1813,18 @@ class Daemon:
 
         try:
             stats = await self.rc("core/stats", {}, timeout=5)
-            moving = stats.get("transferring") or []
+            # The engine moves streamed files; syncs report through their own processes
+            moving = [str(t.get("name", "")) for t in stats.get("transferring") or []]
+            speed = _stats_speed(stats)
+            for f in self.folders.values():
+                if f.job_id:
+                    moving += f.moving
+                    speed += int(f.progress.get("speed", 0) or 0)
             transfers = {
                 "count": len(moving),
-                "speed": _stats_speed(stats),
+                "speed": speed,
                 "names": [
-                    util.neutralize_controls(os.path.basename(str(t.get("name", ""))))
-                    for t in moving[:3]
+                    util.neutralize_controls(os.path.basename(n)) for n in moving[:3]
                 ],
             }
             if transfers != self.transfers:
@@ -2580,19 +2661,7 @@ class Daemon:
     async def cmd_remove_folder(self, args: Dict[str, Any]) -> Dict[str, Any]:
         f = self._folder(args)
         if f.job_id:
-            try:
-                await self.rc("job/stop", {"jobid": f.job_id}, timeout=5)
-            except RcError:
-                pass
-            for _ in range(50):
-                try:
-                    js = await self.rc("job/status", {"jobid": f.job_id}, timeout=3)
-                    if js.get("finished"):
-                        break
-                except RcError:
-                    break
-                await asyncio.sleep(0.2)
-            f.job_id = 0
+            await self._cancel_sync(f)
         r = self.remote_cfg(f.remote)
         r["folders"] = [x for x in r["folders"] if x["id"] != f.id]
         self.save_cfg()

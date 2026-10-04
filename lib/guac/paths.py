@@ -24,7 +24,7 @@ def state_dir() -> Path:
 def runtime_dir() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR")
     path = Path(base) / APP if base else Path(f"/tmp/{APP}-{os.getuid()}")
-    if len(str(path)) + len("/daemon.sock") > _MAX_SOCKET_PATH:
+    if len(str(path)) + len("/sync-00000000.sock") > _MAX_SOCKET_PATH:
         path = Path(f"/tmp/{APP}-{os.getuid()}")
     return path
 
@@ -51,6 +51,11 @@ def daemon_lock() -> Path:
 
 def rclone_socket() -> Path:
     return runtime_dir() / "rclone.sock"
+
+
+def sync_socket(folder_id: str) -> Path:
+    """rc socket of the rclone process running a folder's sync."""
+    return runtime_dir() / f"sync-{folder_id}.sock"
 
 
 def rclone_log() -> Path:

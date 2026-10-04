@@ -268,6 +268,49 @@ def test_takeover(sb: Sandbox) -> None:
          10, "the other rclone mount exited")
 
 
+def test_parallel_sync(sb: Sandbox) -> None:
+    names = ("par1", "par2")
+    for name in names:
+        (sb.remote_b / name).mkdir()
+        # A few files, so changing one isn't bisync's "all files were changed" safety stop
+        for doc in ("shared.md", "a.md", "b.md"):
+            (sb.remote_b / name / doc).write_text("start\n")
+    ids = [sb.ok("add_folder", remote="CloudB", path=name)["id"] for name in names]
+    for fid in ids:
+        wait(lambda: sb.folder(fid)["state"] == "synced", 30, "first sync")
+    locals_ = [Path(sb.folder(fid)["local"]) for fid in ids]
+
+    # Enough new files that each sync is still running when the other starts
+    for name in names:
+        for i in range(400):
+            (sb.remote_b / name / f"f{i}.txt").write_text(f"{name} {i}\n")
+    # A conflict in par1 only: it must not be reported on par2
+    (sb.remote_b / "par1" / "shared.md").write_text("cloud version\n")
+    time.sleep(1.2)
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+    mark = log.stat().st_size
+    (locals_[0] / "shared.md").write_text("local version\n")
+    sb.ok("sync_now")
+
+    def since_mark() -> str:
+        return log.read_bytes()[mark:].decode(errors="replace")
+
+    wait(lambda: all(f"sync {fid} done" in since_mark() for fid in ids), 60, "both folders synced")
+    text = since_mark()
+    first_done = min(text.index(f"sync {fid} done") for fid in ids)
+    assert all(text.index(f"sync {fid} (CloudB:") < first_done for fid in ids), \
+        "folders of the same drive sync at the same time"
+    wait(lambda: sb.folder(ids[0])["conflictCount"] > 0, 15, "conflict reported on par1")
+    assert sb.folder(ids[1])["conflictCount"] == 0, "par1's conflict must not be reported on par2"
+    for local in locals_:
+        assert len(list(local.glob("f*.txt"))) == 400, local
+    wait(lambda: not list((sb.run / "guacamole").glob("sync-*.sock")) and subprocess.run(
+        ["pgrep", "-f", f"rclone rcd --rc-addr=unix://{sb.run}/guacamole/sync-"], capture_output=True).returncode != 0,
+        30, "each sync's rclone process ends with it")
+    for fid in ids:
+        sb.ok("remove_folder", id=fid)
+
+
 def test_remove_folder_keeps_files(sb: Sandbox) -> None:
     fid = sb._fid
     local = Path(sb.folder(fid)["local"])
@@ -345,7 +388,7 @@ def test_shutdown_unmounts(sb: Sandbox) -> None:
 
 
 SCENARIOS = [test_stream, test_busy_unmount, test_keep_local_sync, test_conflict, test_safety_stop, test_recent,
-             test_engine_recovery, test_takeover, test_remove_folder_keeps_files, test_validation, test_move_roots,
+             test_engine_recovery, test_takeover, test_parallel_sync, test_remove_folder_keeps_files, test_validation, test_move_roots,
              test_commands, test_shutdown_unmounts]
 
 
