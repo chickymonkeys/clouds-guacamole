@@ -114,6 +114,7 @@ Panel {
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) { if (dy !== 0) content.scrollBy(dy) }
       onTextKey: function(t) {
         if (content.currentView !== "drives") return
         var k = t.toLowerCase()

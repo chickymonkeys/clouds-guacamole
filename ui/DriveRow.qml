@@ -4,38 +4,57 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// A cloud drive: streaming switch, quota, problems with a one-click fix, and the folders of
-// this drive that are kept on this device.
-CursorSurface {
+// A cloud drive: streaming switch, quota, problems with a one-click fix, and a dropdown of the
+// folders of this drive that are kept on this device. Renaming, moving, the own client and
+// removing live behind the ⋯ button, so the card itself only says what matters now.
+Item {
   id: root
 
   property var drive: ({})
   property var service: null
+  property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property string home: ""
   property string mountRoot: ""
   property bool editing: false
   property bool confirmingRemove: false
+  // Whether the local folders are listed; the panel keeps it, so it outlives this card
+  property bool foldersOpen: false
 
   signal keepFolderRequested(string remote)
   signal clientIdRequested(string remote)
+  signal foldersToggled()
 
   readonly property color dim: Qt.darker(foreground, 1.6)
+  // What the panel scrolls into view when the folders open
+  readonly property Item folderList: folderListItem
+  // Everything below the header lines up with the drive's name
+  readonly property real badgeSize: Style.space(30)
+  readonly property real indent: badgeSize + Style.space(10)
   readonly property bool mounted: drive.mountState === "mounted"
   readonly property bool transitioning: drive.mountState === "mounting" || drive.mountState === "unmounting"
+  readonly property bool failed: drive.mountState === "error" || drive.mountState === "foreign"
+  readonly property bool quotaKnown: drive.quotaKnown === true
+  readonly property bool quotaHigh: quotaKnown && drive.quotaPercent > 90
   readonly property var folders: drive.folders || []
   readonly property bool hasEdits: editing && (labelInput.text.trim() !== String(drive.label || "")
                                               || pathInput.text.trim() !== String(drive.mountPath || ""))
-  readonly property color chipColor: {
-    switch (drive.mountState) {
-      case "mounted": return Color.accent
-      case "error":
-      case "foreign": return Color.urgent
-      case "waiting":
-      case "mounting":
-      case "unmounting": return Qt.darker(foreground, 1.2)
-      default: return Qt.darker(foreground, 1.8)
-    }
+
+  // One line under the name. The switch already says a drive is streaming, so the state is
+  // only spelled out when it isn't, or when there is nothing else to say.
+  readonly property string subtitle: {
+    var parts = []
+    if (!mounted || (!quotaKnown && !(drive.uploads > 0)))
+      parts.push((failed ? "󰀦 " : "") + Model.mountStateText(drive))
+    if (quotaKnown) parts.push(Model.formatBytes(drive.quotaUsed) + " of " + Model.formatBytes(drive.quotaTotal))
+    if (drive.uploads > 0) parts.push("󰕒 " + drive.uploads + " uploading")
+    return parts.join("  ·  ")
+  }
+  readonly property color subtitleColor: {
+    if (failed) return Color.urgent
+    if (drive.uploads > 0) return Color.accent
+    if (transitioning || drive.mountState === "waiting") return Qt.darker(foreground, 1.2)
+    return dim
   }
 
   function resetEditor() {
@@ -53,36 +72,25 @@ CursorSurface {
     root.editing = false
   }
 
-  implicitHeight: column.implicitHeight + Style.space(16)
-  hasCursor: false
-
-  MouseArea {
-    anchors.fill: parent
-    hoverEnabled: true
-    acceptedButtons: Qt.NoButton
-    onEntered: root.hasCursor = true
-    onExited: root.hasCursor = false
-  }
+  implicitHeight: column.implicitHeight
 
   ColumnLayout {
     id: column
     anchors {
       left: parent.left
       right: parent.right
-      verticalCenter: parent.verticalCenter
-      leftMargin: Style.space(10)
-      rightMargin: Style.space(10)
+      top: parent.top
     }
-    spacing: Style.space(6)
+    spacing: Style.space(8)
 
-    // Header: provider badge, name, state, actions
+    // Header: provider badge, name with one status line and the quota, then the actions
     RowLayout {
       Layout.fillWidth: true
-      spacing: Style.space(8)
+      spacing: Style.space(10)
 
       Item {
-        implicitWidth: Style.space(30)
-        implicitHeight: Style.space(30)
+        implicitWidth: root.badgeSize
+        implicitHeight: root.badgeSize
 
         Rectangle {
           anchors.fill: parent
@@ -101,65 +109,76 @@ CursorSurface {
 
       ColumnLayout {
         Layout.fillWidth: true
-        spacing: Style.space(1)
+        Layout.alignment: Qt.AlignVCenter
+        spacing: Style.space(2)
 
-        RowLayout {
+        Text {
           Layout.fillWidth: true
-          spacing: Style.space(6)
-
-          Text {
-            textFormat: Text.PlainText
-            text: root.drive.label || root.drive.name || ""
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-            elide: Text.ElideRight
-            Layout.maximumWidth: Style.space(130)
-          }
-
-          Text {
-            Layout.fillWidth: true
-            textFormat: Text.PlainText
-            text: (root.mounted ? "󰄬 " : (root.drive.mountState === "error" || root.drive.mountState === "foreign" ? "󰀦 " : ""))
-                  + Model.mountStateText(root.drive)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption - Style.space(1)
-            color: root.chipColor
-            elide: Text.ElideRight
-          }
+          textFormat: Text.PlainText
+          text: root.drive.label || root.drive.name || ""
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+          color: root.foreground
+          elide: Text.ElideRight
         }
 
         Text {
           Layout.fillWidth: true
           textFormat: Text.PlainText
-          text: Model.tildify(root.drive.mountPath, root.home)
-                + (root.drive.uploads > 0 ? "  ·  󰕒 " + root.drive.uploads + " uploading" : "")
+          text: root.subtitle
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(2)
-          color: root.drive.uploads > 0 ? Color.accent : root.dim
-          elide: Text.ElideMiddle
+          font.pixelSize: Style.font.caption
+          color: root.subtitleColor
+          elide: Text.ElideRight
+        }
+
+        Rectangle {
+          visible: root.quotaKnown
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(3)
+          implicitHeight: Style.space(3)
+          radius: height / 2
+          color: Qt.rgba(1, 1, 1, 0.08)
+
+          Rectangle {
+            width: Math.min(parent.width, Math.max(0, parent.width * (root.drive.quotaPercent || 0) / 100))
+            height: parent.height
+            radius: height / 2
+            color: root.quotaHigh ? Color.urgent : (root.mounted ? Color.accent : root.dim)
+          }
+
+          HoverHandler { id: quotaHover }
+
+          PanelToolTip {
+            visible: quotaHover.hovered
+            text: root.drive.quotaPercent + "% used, " + Model.formatBytes(root.drive.quotaFree) + " free"
+            fontFamily: root.fontFamily
+          }
         }
       }
 
+      // Kept in the layout while hidden, so every card's switch sits in the same column
       PanelActionButton {
-        iconText: "󰏫"
-        tooltipText: root.editing ? "Close editor" : "Rename or move this drive"
-        foreground: root.editing ? Color.accent : root.foreground
+        iconText: "󰉋"
+        tooltipText: "Open " + Model.tildify(root.drive.mountPath, root.home)
+        foreground: root.dim
+        hoverColor: Color.accent
+        enabled: root.mounted
+        opacity: root.mounted ? 1 : 0
+        onClicked: root.service.openPath(root.drive.mountPath)
+      }
+
+      PanelActionButton {
+        iconText: "󰇘"
+        tooltipText: root.editing ? "Close" : "Rename, move or remove"
+        foreground: root.editing ? Color.accent : root.dim
         hoverColor: Color.accent
         onClicked: {
           if (!root.editing) root.resetEditor()
+          root.confirmingRemove = false
           root.editing = !root.editing
         }
-      }
-
-      PanelActionButton {
-        visible: root.mounted
-        iconText: "󰉋"
-        tooltipText: "Open in the file manager"
-        foreground: root.foreground
-        hoverColor: Color.accent
-        onClicked: root.service.openPath(root.drive.mountPath)
       }
 
       ToggleSwitch {
@@ -175,93 +194,175 @@ CursorSurface {
           fontFamily: root.fontFamily
         }
       }
-
-      PanelActionButton {
-        iconText: "󰆴"
-        tooltipText: "Remove this account"
-        foreground: root.confirmingRemove ? Color.urgent : root.dim
-        hoverColor: Color.urgent
-        onClicked: root.confirmingRemove = !root.confirmingRemove
-      }
     }
 
-    // Remove confirmation
-    RowLayout {
-      visible: root.confirmingRemove
+    // Drawer: display name, mount location, own client, and removing the drive
+    BorderSurface {
+      visible: root.editing
       Layout.fillWidth: true
-      spacing: Style.space(8)
+      implicitHeight: editCol.implicitHeight + Style.space(20)
+      radius: Style.cornerRadius
+      color: Qt.rgba(1, 1, 1, 0.04)
+      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
 
-      Text {
-        Layout.fillWidth: true
-        textFormat: Text.PlainText
-        text: "Remove " + (root.drive.label || root.drive.name) + "? Its rclone account is deleted; local copies stay."
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption - Style.space(1)
-        color: Color.urgent
-        wrapMode: Text.WordWrap
-      }
-
-      Button {
-        text: "Remove"
-        iconText: "󰆴"
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        foreground: Color.urgent
-        bordered: true
-        onClicked: {
-          root.confirmingRemove = false
-          root.service.removeRemote(root.drive.name)
+      ColumnLayout {
+        id: editCol
+        anchors {
+          fill: parent
+          margins: Style.space(10)
         }
-      }
-
-      Button {
-        text: "Cancel"
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        foreground: root.foreground
-        bordered: false
-        onClicked: root.confirmingRemove = false
-      }
-    }
-
-    // Quota
-    ColumnLayout {
-      visible: root.drive.quotaKnown === true
-      Layout.fillWidth: true
-      spacing: Style.space(3)
-
-      RowLayout {
-        Layout.fillWidth: true
+        spacing: Style.space(6)
 
         Text {
-          text: Model.formatBytes(root.drive.quotaUsed) + " of " + Model.formatBytes(root.drive.quotaTotal)
+          text: "Display name"
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(2)
+          font.pixelSize: Style.font.caption
+          color: Qt.darker(root.foreground, 1.4)
+        }
+
+        TextField {
+          id: labelInput
+          Layout.fillWidth: true
+          placeholderText: root.drive.name || ""
+          onAccepted: if (root.hasEdits) root.applyEdits()
+        }
+
+        Text {
+          Layout.topMargin: Style.space(4)
+          text: "Mount location"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          color: Qt.darker(root.foreground, 1.4)
+        }
+
+        TextField {
+          id: pathInput
+          Layout.fillWidth: true
+          placeholderText: root.mountRoot + "/" + (root.drive.name || "")
+          onAccepted: if (root.hasEdits) root.applyEdits()
+        }
+
+        Text {
+          visible: root.mounted
+          Layout.fillWidth: true
+          text: "Changing the location unmounts the drive and mounts it again."
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption - Style.space(1)
           color: root.dim
+          wrapMode: Text.WordWrap
         }
 
-        Item { Layout.fillWidth: true }
+        RowLayout {
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(4)
+          spacing: Style.space(8)
 
-        Text {
-          text: root.drive.quotaPercent + "%"
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(2)
-          font.bold: true
-          color: root.drive.quotaPercent > 90 ? Color.urgent : Qt.darker(root.foreground, 1.4)
+          Button {
+            text: "Save"
+            iconText: "󰄬"
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            foreground: root.foreground
+            bordered: true
+            enabled: root.hasEdits
+            opacity: enabled ? 1.0 : 0.45
+            onClicked: root.applyEdits()
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Button {
+            text: "Cancel"
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            foreground: root.foreground
+            bordered: false
+            onClicked: root.editing = false
+          }
         }
-      }
 
-      Rectangle {
-        Layout.fillWidth: true
-        implicitHeight: Style.space(3)
-        radius: height / 2
-        color: Qt.rgba(1, 1, 1, 0.08)
+        PanelSeparator {
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(4)
+          foreground: root.foreground
+        }
 
-        Rectangle {
-          width: Math.min(parent.width, Math.max(0, parent.width * (root.drive.quotaPercent || 0) / 100))
-          height: parent.height
-          radius: height / 2
-          color: root.drive.quotaPercent > 90 ? Color.urgent : Color.accent
+        RowLayout {
+          visible: !root.confirmingRemove
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Button {
+            visible: root.drive.canCustomClient === true
+            iconText: "󰌋"
+            text: root.drive.customClient ? "Change my client" : "Set up my own client"
+            tooltipText: "A client of your own isn't shared with every rclone user, so it isn't rate-limited with them"
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            foreground: root.foreground
+            bordered: false
+            onClicked: {
+              root.editing = false
+              root.clientIdRequested(root.drive.name)
+            }
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Button {
+            iconText: "󰆴"
+            text: "Remove drive"
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            foreground: Color.urgent
+            bordered: false
+            onClicked: root.confirmingRemove = true
+          }
+        }
+
+        // Remove confirmation
+        ColumnLayout {
+          visible: root.confirmingRemove
+          Layout.fillWidth: true
+          spacing: Style.space(6)
+
+          Text {
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: "Remove " + (root.drive.label || root.drive.name) + "? Its rclone account is deleted; local copies stay."
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Color.urgent
+            wrapMode: Text.WordWrap
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Button {
+              text: "Remove"
+              iconText: "󰆴"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: Color.urgent
+              bordered: true
+              onClicked: {
+                root.confirmingRemove = false
+                root.editing = false
+                root.service.removeRemote(root.drive.name)
+              }
+            }
+
+            Button {
+              text: "Keep it"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: false
+              onClicked: root.confirmingRemove = false
+            }
+          }
         }
       }
     }
@@ -270,7 +371,7 @@ CursorSurface {
     BorderSurface {
       visible: (root.drive.error || "") !== "" && root.drive.mountState !== "mounted"
       Layout.fillWidth: true
-      implicitHeight: errCol.implicitHeight + Style.space(12)
+      implicitHeight: errCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
       color: Qt.alpha(root.drive.mountState === "waiting" ? root.foreground : Color.urgent, 0.06)
       borderSpec: Border.controlSpec("normal", root.drive.mountState === "waiting" ? root.foreground : Color.urgent, Color.urgent)
@@ -279,9 +380,9 @@ CursorSurface {
         id: errCol
         anchors {
           fill: parent
-          margins: Style.space(6)
+          margins: Style.space(8)
         }
-        spacing: Style.space(6)
+        spacing: Style.space(8)
 
         Text {
           Layout.fillWidth: true
@@ -353,6 +454,7 @@ CursorSurface {
       RowLayout {
         required property var modelData
         Layout.fillWidth: true
+        Layout.leftMargin: root.indent
         spacing: Style.space(6)
 
         Text {
@@ -361,7 +463,7 @@ CursorSurface {
           textFormat: Text.PlainText
           text: "󰀦  " + modelData.text
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(1)
+          font.pixelSize: Style.font.caption
           color: Qt.lighter(Color.accent, 1.1)
           wrapMode: Text.WordWrap
         }
@@ -392,145 +494,19 @@ CursorSurface {
       }
     }
 
-    // Inline editor: display name and mount location
-    BorderSurface {
-      visible: root.editing
+    // Folders kept on this device, lined up under the drive's name
+    FolderList {
+      id: folderListItem
       Layout.fillWidth: true
-      implicitHeight: editCol.implicitHeight + Style.space(16)
-      radius: Style.cornerRadius
-      color: Qt.rgba(1, 1, 1, 0.04)
-      borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
-
-      ColumnLayout {
-        id: editCol
-        anchors {
-          fill: parent
-          margins: Style.space(10)
-        }
-        spacing: Style.space(6)
-
-        Text {
-          text: "Display name"
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(1)
-          color: Qt.darker(root.foreground, 1.4)
-        }
-
-        TextField {
-          id: labelInput
-          Layout.fillWidth: true
-          placeholderText: root.drive.name || ""
-          onAccepted: if (root.hasEdits) root.applyEdits()
-        }
-
-        Text {
-          text: "Mount location"
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(1)
-          color: Qt.darker(root.foreground, 1.4)
-        }
-
-        TextField {
-          id: pathInput
-          Layout.fillWidth: true
-          placeholderText: root.mountRoot + "/" + (root.drive.name || "")
-          onAccepted: if (root.hasEdits) root.applyEdits()
-        }
-
-        Text {
-          visible: root.mounted
-          Layout.fillWidth: true
-          text: "Changing the location unmounts the drive and mounts it again."
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption - Style.space(2)
-          color: root.dim
-          wrapMode: Text.WordWrap
-        }
-
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: Style.space(8)
-
-          Button {
-            text: "Save"
-            iconText: "󰄬"
-            fontFamily: root.fontFamily
-            fontSize: Style.font.caption
-            foreground: root.foreground
-            bordered: true
-            enabled: root.hasEdits
-            opacity: enabled ? 1.0 : 0.45
-            onClicked: root.applyEdits()
-          }
-
-          Button {
-            visible: root.drive.canCustomClient === true
-            text: root.drive.customClient ? "Change my client" : "Set up my own client"
-            fontFamily: root.fontFamily
-            fontSize: Style.font.caption
-            foreground: root.foreground
-            bordered: false
-            onClicked: {
-              root.editing = false
-              root.clientIdRequested(root.drive.name)
-            }
-          }
-
-          Item { Layout.fillWidth: true }
-
-          Button {
-            text: "Cancel"
-            fontFamily: root.fontFamily
-            fontSize: Style.font.caption
-            foreground: root.foreground
-            bordered: false
-            onClicked: root.editing = false
-          }
-        }
-      }
-    }
-
-    // Folders kept on this device
-    ColumnLayout {
-      Layout.fillWidth: true
-      spacing: Style.space(2)
-
-      Text {
-        visible: root.folders.length > 0
-        text: "ON THIS DEVICE"
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption - Style.space(2)
-        font.letterSpacing: 0.6
-        color: root.dim
-        topPadding: Style.space(2)
-      }
-
-      Repeater {
-        // By index: each state push brings new objects, and rebuilding rows would drop open confirmations
-        model: root.folders.length
-
-        FolderRow {
-          required property int index
-          Layout.fillWidth: true
-          folder: root.folders[index] || ({})
-          service: root.service
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          home: root.home
-        }
-      }
-
-      Button {
-        Layout.topMargin: Style.space(2)
-        iconText: "󰋊"
-        text: root.folders.length > 0 ? "Keep another folder on this device" : "Keep a folder on this device"
-        tooltipText: "Pick a cloud folder to have locally: instant and available offline, synced both ways"
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        foreground: Qt.darker(root.foreground, 1.2)
-        bordered: false
-        onClicked: root.keepFolderRequested(root.drive.name)
-      }
+      Layout.leftMargin: root.indent - Style.space(8)
+      folders: root.folders
+      open: root.foldersOpen
+      service: root.service
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      home: root.home
+      onToggled: root.foldersToggled()
+      onKeepFolderRequested: root.keepFolderRequested(root.drive.name)
     }
   }
 }

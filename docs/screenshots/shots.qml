@@ -124,6 +124,14 @@ ShellRoot {
     return shown().filter(function(i) { return i.keepFolderRequested !== undefined && i.drive && i.drive.name === name })[0]
   }
   function scene(name) { svc.request("demo_scene", { name: name }) }
+  function drivesFlick() {
+    return shown().filter(function(i) { return i.flickableDirection !== undefined && i.contentItem && i.model === undefined })[0]
+  }
+  function inView(item) {
+    var f = drivesFlick()
+    var top = item.mapToItem(f.contentItem, 0, 0).y
+    return top >= f.contentY - 1 && top + item.height <= f.contentY + f.height + 1
+  }
 
   function step(desc, fn, delay) { queue.push({ desc: desc, fn: fn, delay: delay === undefined ? 700 : delay }) }
   function shot(name, item) {
@@ -170,15 +178,40 @@ ShellRoot {
       return true
     })
     step("full height", function() { card.cap = 4000; return true })
+    step("Drive's folders open", function() { content.setFoldersOpen("Drive", true) })
     shot("panel")
 
-    step("attention scene", function() { scene("attention") }, 1200)
+    step("attention scene", function() { scene("attention"); content.setFoldersOpen("Drive", false) }, 1200)
     step("recent collapsed", function() {
       var rf = byProp("files")
       shown(rf).filter(function(i) { return i.cursorShape !== undefined && typeof i.clicked === "function" })[0].clicked(null)
       return true
     })
     shot("conflicts")
+
+    // Many folders on one drive: closed down to the one that needs a look, then open
+    step("many-folders scene", function() { scene("many") }, 1200)
+    step("closed", function() { return driveCard("Drive").foldersOpen === false })
+    shot("folder-list")
+    step("open", function() { content.setFoldersOpen("Drive", true) })
+    shot("folder-list-open")
+    step("closed again", function() { content.setFoldersOpen("Drive", false) })
+    step("only the conflicted folder still listed", function() {
+      return shown(driveCard("Drive")).filter(function(i) { return i.folder !== undefined && i.folder.name }).map(function(i) {
+        return i.folder.name
+      }).join() === "Notes"
+    })
+
+    // At the panel's real height, opening a list below the fold scrolls it into view
+    step("real height, Drive's folders open", function() { content.setFoldersOpen("Drive", true); card.cap = Style.space(620) })
+    step("open Dropbox's folders", function() { driveCard("Dropbox").foldersToggled() })
+    step("scrolled into view", function() { return drivesFlick().contentY > 0 && inView(driveCard("Dropbox").folderList) })
+    step("full height again", function() {
+      content.setFoldersOpen("Drive", false)
+      content.setFoldersOpen("Dropbox", false)
+      card.cap = 4000
+      drivesFlick().contentY = 0
+    })
 
     // Own client: the card's notice, then the guide
     step("shared-client scene", function() { scene("shared") }, 1200)

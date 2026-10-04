@@ -11,7 +11,8 @@ function formatBytes(bytes) {
     b /= 1024
     i++
   }
-  return (i === 0 ? b.toFixed(0) : b.toFixed(1)) + " " + units[i]
+  // 100 GB, not 100.0 GB
+  return (i === 0 ? b.toFixed(0) : b.toFixed(1).replace(/\.0$/, "")) + " " + units[i]
 }
 
 function formatSpeed(bps) {
@@ -79,6 +80,38 @@ function folderStateText(f) {
     case "error": return "retrying " + inFuture(f.nextSync)
     default: return f.state || ""
   }
+}
+
+// Folders that stay listed while their drive's list is closed: the ones that need a look or a
+// decision. Syncing doesn't count, or rows would come and go every few minutes; a folder you
+// just added shows because adding one opens the list.
+function folderStaysListed(f) {
+  if (!f) return false
+  if (f.state === "attention" || f.state === "error") return true
+  return (f.conflictCount || 0) > 0 || (f.watchError || "") !== ""
+}
+
+// One phrase for a drive's folders, what the busiest of them is doing, and its tone
+function folderGroup(list) {
+  var attention = 0, retrying = 0, syncing = 0, pending = 0, offline = 0, paused = 0
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i] || {}
+    if (f.state === "attention") attention++
+    else if (f.state === "error") retrying++
+    else if (f.paused || f.state === "paused") paused++
+    else if (f.state === "syncing") syncing++
+    else if (f.state === "changes" || f.state === "pending") pending++
+    else if (f.state === "waiting") offline++
+  }
+  var busy = syncing > 0
+  if (attention > 0) return { text: attention + (attention === 1 ? " needs you" : " need you"), tone: "urgent", busy: busy }
+  if (retrying > 0) return { text: retrying + " retrying", tone: "urgent", busy: busy }
+  if (syncing > 0) return { text: syncing + " syncing", tone: "accent", busy: busy }
+  if (pending > 0) return { text: pending + " waiting to sync", tone: "accent", busy: false }
+  if (offline > 0) return { text: "offline, will sync", tone: "dim", busy: false }
+  if (paused > 0 && paused === list.length) return { text: "paused", tone: "dim", busy: false }
+  if (paused > 0) return { text: "synced, " + paused + " paused", tone: "dim", busy: false }
+  return { text: list.length === 1 ? "synced" : "all synced", tone: "dim", busy: false }
 }
 
 function fileGlyph(name) {
