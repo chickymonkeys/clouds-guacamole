@@ -5,6 +5,7 @@
 #   ./install.sh --link      symlink it instead (for development)
 #   ./install.sh --uninstall stop the service, disable the widget, remove what this script installed
 #   --no-restart             on an update, don't restart the shell and guacd to load the new code
+#   --no-enable              install without adding the widget to the bar
 #
 # The recommended route is `omarchy plugin add <git url> --enable`; this script is for local
 # checkouts. It only ever removes or replaces what belongs to Guacamole: a symlink to a

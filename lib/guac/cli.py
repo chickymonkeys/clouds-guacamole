@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--no-stream", action="store_true")
     s = sub.add_parser(
         "client-guide",
-        help="How to create your own OAuth client (drive, dropbox, onedrive, box)",
+        help="How to create your own OAuth client (drive, dropbox, onedrive, box, pcloud)",
     )
     s.add_argument("provider", choices=sorted(providers.CLIENT_GUIDES))
     s = sub.add_parser(

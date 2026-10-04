@@ -68,7 +68,7 @@ Nextcloud, WebDAV, S3 and Proton Drive have no OAuth client to create. Except on
 
 ## Install
 
-Requirements: Omarchy 4 (Quickshell shell), `rclone`, `fuse3`, Python 3 (standard library only).
+Requirements: Omarchy 4 (Quickshell shell), `rclone`, `fuse3`, Python 3.10 or newer (standard library only).
 
 ```bash
 omarchy plugin add https://github.com/chickymonkeys/clouds-guacamole --enable
@@ -82,7 +82,7 @@ Or from a checkout:
 ./install.sh --uninstall
 ```
 
-Running it again updates an existing install and restarts the shell and `guacd` so the new version loads (the shell only reloads a changed widget on restart); `--no-restart` skips that. `guacd` is left alone while files are uploading.
+Running it again updates an existing install and restarts the shell and `guacd` so the new version loads (the shell only reloads a changed widget on restart); `--no-restart` skips that. `--no-enable` installs without adding the widget to the bar. `guacd` is left alone while files are uploading.
 
 The widget starts `guacd` on demand as a transient systemd user unit (`guacamole.service`). It survives shell restarts and plugin reloads and stops cleanly at logout, and drives you were streaming are mounted again when it starts. To start it at login even without the bar widget, run `guac service install`.
 
@@ -141,12 +141,12 @@ guac service install|uninstall
 | `~/.config/guacamole/config.json` | Settings, and per drive: streaming, mount path, local folders              |
 | `~/.config/guacamole/filters.txt` | Never-synced patterns (editing it makes the next syncs safe resyncs)       |
 | `~/.local/state/guacamole/`       | `state.json`, `daemon.log`, `rclone.log`, bisync work files, `backups/`    |
-| `$XDG_RUNTIME_DIR/guacamole/`     | `daemon.sock` (widget, CLI) and `rclone.sock` (rclone rc), both private    |
+| `$XDG_RUNTIME_DIR/guacamole/`     | Private sockets: `daemon.sock` (widget, CLI), `rclone.sock` (rclone rc), `sync-<id>.sock` while a folder syncs |
 | `~/.cache/rclone/vfs*`            | rclone's stream cache                                                      |
 
 Accounts and credentials stay in rclone's own config (`~/.config/rclone/rclone.conf`). Secrets travel only over the private sockets and through the environment of `rclone authorize`, never on a command line, since every local user can read other processes' arguments.
 
-## Tests
+## Development
 
 ```bash
 tests/test_config.py   # settings, provider guides and client checks, path rules
@@ -161,6 +161,12 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;
 - path and client validation, logs, and clean shutdown.
+
+The Python code is formatted and checked with [ruff](https://docs.astral.sh/ruff/) and [ty](https://docs.astral.sh/ty/) (`uv tool install ruff ty`; settings in `pyproject.toml`):
+
+```bash
+ruff format && ruff check && ty check
+```
 
 ## License
 
