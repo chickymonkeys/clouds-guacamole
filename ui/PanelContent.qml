@@ -323,6 +323,38 @@ Item {
       }
     }
 
+    // Fades where the list runs on past an edge, so a cut-off card reads as "scroll for more".
+    // They follow the distance left to scroll, so they ease out as an edge is reached.
+    Rectangle {
+      anchors {
+        left: drivesFlick.left
+        right: drivesFlick.right
+        top: drivesFlick.top
+      }
+      height: Style.space(20)
+      opacity: Math.max(0, Math.min(1, drivesFlick.contentY / height))
+      visible: opacity > 0
+      gradient: Gradient {
+        GradientStop { position: 0; color: Color.popups.background }
+        GradientStop { position: 1; color: Qt.alpha(Color.popups.background, 0) }
+      }
+    }
+
+    Rectangle {
+      anchors {
+        left: drivesFlick.left
+        right: drivesFlick.right
+        bottom: drivesFlick.bottom
+      }
+      height: Style.space(28)
+      opacity: Math.max(0, Math.min(1, (drivesFlick.contentHeight - drivesFlick.height - drivesFlick.contentY) / height))
+      visible: opacity > 0
+      gradient: Gradient {
+        GradientStop { position: 0; color: Qt.alpha(Color.popups.background, 0) }
+        GradientStop { position: 1; color: Color.popups.background }
+      }
+    }
+
     // Pinned under the list: adding a drive, and the panel-wide actions
     ColumnLayout {
       id: footer
