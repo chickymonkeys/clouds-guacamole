@@ -82,6 +82,33 @@ function folderStateText(f) {
   }
 }
 
+// Folders that stay listed when their drive's list is folded: the ones that need a look or a
+// decision, and new ones still downloading. Routine syncs don't count, or rows would come and
+// go every few minutes.
+function folderStaysListed(f) {
+  if (!f) return false
+  if (f.state === "attention" || f.state === "error") return true
+  if ((f.conflictCount || 0) > 0 || (f.watchError || "") !== "") return true
+  return f.initialized === false && (f.state === "syncing" || f.state === "pending")
+}
+
+// One phrase for a group of folders: what the busiest of them is doing
+function folderGroupText(list) {
+  var syncing = 0, pending = 0, offline = 0, paused = 0
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i] || {}
+    if (f.paused || f.state === "paused") paused++
+    else if (f.state === "syncing") syncing++
+    else if (f.state === "changes" || f.state === "pending") pending++
+    else if (f.state === "waiting") offline++
+  }
+  if (syncing > 0) return syncing + " syncing"
+  if (pending > 0) return pending + " waiting to sync"
+  if (offline > 0) return "offline, will sync"
+  if (paused === list.length) return "paused"
+  return paused > 0 ? "synced, " + paused + " paused" : "all synced"
+}
+
 function fileGlyph(name) {
   var n = String(name || "").toLowerCase()
   var ext = n.lastIndexOf(".") > 0 ? n.substring(n.lastIndexOf(".") + 1) : ""

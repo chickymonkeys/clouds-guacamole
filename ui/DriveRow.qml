@@ -32,6 +32,12 @@ Item {
   readonly property bool quotaKnown: drive.quotaKnown === true
   readonly property bool quotaHigh: quotaKnown && drive.quotaPercent > 90
   readonly property var folders: drive.folders || []
+  // Past this many folders the list folds into one line, keeping only those that need you
+  readonly property int foldAfter: 3
+  property bool foldersExpanded: false
+  readonly property bool foldable: folders.length > foldAfter
+  readonly property bool folded: foldable && !foldersExpanded
+  readonly property var routineFolders: folders.filter(function(f) { return !Model.folderStaysListed(f) })
   readonly property bool hasEdits: editing && (labelInput.text.trim() !== String(drive.label || "")
                                               || pathInput.text.trim() !== String(drive.mountPath || ""))
 
@@ -501,6 +507,7 @@ Item {
 
         FolderRow {
           required property int index
+          visible: !root.folded || Model.folderStaysListed(folder)
           Layout.fillWidth: true
           folder: root.folders[index] || ({})
           service: root.service
@@ -508,6 +515,17 @@ Item {
           fontFamily: root.fontFamily
           home: root.home
         }
+      }
+
+      FolderFoldRow {
+        visible: root.foldable && root.routineFolders.length > 0
+        Layout.fillWidth: true
+        folders: root.routineFolders
+        expanded: root.foldersExpanded
+        more: root.routineFolders.length < root.folders.length
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onToggled: root.foldersExpanded = !root.foldersExpanded
       }
 
       Button {
