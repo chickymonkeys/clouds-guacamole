@@ -75,7 +75,7 @@ function folderStateText(f) {
     case "changes": return "changes pending"
     case "pending": return "waiting to sync"
     case "waiting": return "offline, will sync"
-    case "paused": return "paused"
+    case "paused": return f.localChanges ? "paused, changes waiting" : "paused"
     case "attention": return "needs attention"
     case "error": return "retrying " + inFuture(f.nextSync)
     default: return f.state || ""
@@ -98,7 +98,7 @@ function folderGroup(list) {
     var f = list[i] || {}
     if (f.state === "attention") attention++
     else if (f.state === "error") retrying++
-    else if (f.paused || f.state === "paused") paused++
+    else if (f.state === "paused") paused++
     else if (f.state === "syncing") syncing++
     else if (f.state === "changes" || f.state === "pending") pending++
     else if (f.state === "waiting") offline++
