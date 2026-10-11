@@ -142,6 +142,7 @@ class Folder:
     path: str
     local: str
     paused: bool = False
+    label: str = ""
     job_id: int = 0
     job_started: float = 0.0
     progress: dict[str, Any] = field(default_factory=dict)
@@ -1211,6 +1212,7 @@ class Daemon:
                         path=spec["path"],
                         local=str(paths.expand(spec["local"])),
                         paused=spec.get("paused", False),
+                        label=spec.get("label") or "",
                     )
                     f.initialized = bool(saved.get("initialized"))
                     f.last_sync = float(saved.get("last_sync", 0))
@@ -1227,6 +1229,7 @@ class Daemon:
                     self._watch_folder(f)
                 else:
                     f.paused = spec.get("paused", False)
+                    f.label = spec.get("label") or ""
         self.st.pop("filters_changed", None)
         for fid in list(self.folders):
             if fid not in seen:
@@ -1485,7 +1488,7 @@ class Daemon:
                 )[:20]
                 self.notify(
                     f"conflict:{f.id}",
-                    f"Sync conflict in {os.path.basename(f.local)}",
+                    f"Sync conflict in {f.label or os.path.basename(f.local)}",
                     "Kept both versions: " + ", ".join(conflicts[:3]),
                 )
             if f.dirty_during_run:
@@ -1591,7 +1594,7 @@ class Daemon:
         self._persist_folder(f)
         self.notify(
             f"attention:{f.id}:{code}",
-            f"{os.path.basename(f.local)} needs attention",
+            f"{f.label or os.path.basename(f.local)} needs attention",
             message,
             "critical",
         )
@@ -1993,6 +1996,11 @@ class Daemon:
 
     # ------------------------------------------------------------------ state for clients
 
+    def _folder_default_name(self, f: Folder) -> str:
+        if f.path:
+            return os.path.basename(f.path)
+        return self.remote_cfg(f.remote).get("label") or f.remote
+
     def _folder_state(self, f: Folder, now: float) -> dict[str, Any]:
         if f.paused:
             state = "paused"
@@ -2010,16 +2018,14 @@ class Daemon:
             state = "changes"
         else:
             state = "synced"
-        name = (
-            os.path.basename(f.path)
-            if f.path
-            else (self.remote_cfg(f.remote).get("label") or f.remote)
-        )
         return {
             "id": f.id,
             "remote": f.remote,
             "path": f.path,
-            "name": name,
+            # The alias when set, else the folder's own name
+            "name": f.label or self._folder_default_name(f),
+            "label": f.label,
+            "defaultName": self._folder_default_name(f),
             "local": f.local,
             "state": state,
             "paused": f.paused,
@@ -2721,6 +2727,18 @@ class Daemon:
             self.wake()
         self.mark()
         return {"message": "Paused" if paused else "Resumed"}
+
+    async def cmd_set_folder(self, args: dict[str, Any]) -> dict[str, Any]:
+        f = self._folder(args)
+        if "label" in args:
+            label = str(args.get("label") or "").strip()
+            f.label = label if label != self._folder_default_name(f) else ""
+            for spec in self.remote_cfg(f.remote)["folders"]:
+                if spec["id"] == f.id:
+                    spec["label"] = f.label or None
+        self.save_cfg()
+        self.mark()
+        return {"message": "Saved"}
 
     async def cmd_sync_now(self, args: dict[str, Any]) -> dict[str, Any]:
         targets = (

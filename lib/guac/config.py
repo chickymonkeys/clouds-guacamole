@@ -112,12 +112,17 @@ def normalize_remote(entry: Any) -> dict[str, Any]:
     for f in entry.get("folders") or []:
         if not isinstance(f, dict) or not isinstance(f.get("local"), str):
             continue
+        alias = f.get("label")
         folders.append(
             {
                 "id": str(f.get("id") or new_id()),
                 "path": str(f.get("path") or "").strip("/"),
                 "local": f["local"],
                 "paused": bool(f.get("paused", False)),
+                # Display name in the widget and CLI; None shows the folder's own name
+                "label": alias.strip()
+                if isinstance(alias, str) and alias.strip()
+                else None,
             }
         )
     label = entry.get("label")
