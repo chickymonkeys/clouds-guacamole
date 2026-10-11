@@ -226,6 +226,8 @@ Item {
     act("remove_folder", { id: id, delete_local: deleteLocal === true }, "Updating…")
   }
   function pauseFolder(id, paused) { act("pause_folder", { id: id, paused: paused }, "") }
+  // An empty label shows the folder's own name again
+  function setFolder(id, label) { act("set_folder", { id: id, label: label }, "") }
   function syncNow(id) { act("sync_now", id ? { id: id } : {}, "") }
   function resolveFolder(id, action) { act("resolve", { id: id, action: action }, "") }
   function clearConflicts(id) { request("clear_conflicts", { id: id }) }

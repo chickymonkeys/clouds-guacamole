@@ -14,12 +14,13 @@ CursorSurface {
   property string fontFamily: Style.font.family
   property string home: ""
   property bool confirmingRemove: false
+  property bool editing: false
 
   readonly property color dim: Qt.darker(foreground, 1.6)
   readonly property string state_: folder.state || ""
   readonly property bool syncing: state_ === "syncing"
   readonly property bool needsAttention: state_ === "attention"
-  readonly property bool showActions: hover.hovered || confirmingRemove
+  readonly property bool showActions: hover.hovered || confirmingRemove || editing
   // The name and everything under it start here
   readonly property real glyphWidth: Style.space(16)
   readonly property real textIndent: glyphWidth + Style.space(8)
@@ -34,10 +35,20 @@ CursorSurface {
     if (p.totalTransfers > 0) return Math.min(1, p.transfers / p.totalTransfers)
     return -1
   }
-  readonly property bool hasDetails: syncing || needsAttention || confirmingRemove
+  readonly property bool hasEdits: editing && labelInput.text.trim() !== String(folder.label || "")
+  readonly property bool hasDetails: syncing || needsAttention || confirmingRemove || editing
                                      || (state_ === "error" && (folder.error || "") !== "")
                                      || (folder.conflictCount || 0) > 0
                                      || (folder.watchError || "") !== ""
+
+  function resetEditor() {
+    labelInput.text = String(folder.label || folder.defaultName || "")
+  }
+
+  function applyEdits() {
+    root.service.setFolder(folder.id, labelInput.text.trim())
+    root.editing = false
+  }
 
   implicitHeight: col.implicitHeight + Style.space(6)
   hasCursor: hover.hovered
@@ -154,12 +165,28 @@ CursorSurface {
         }
 
         PanelActionButton {
+          iconText: "󰏫"
+          tooltipText: root.editing ? "Close" : "Rename"
+          fontSize: Style.font.body
+          foreground: root.editing ? Color.accent : root.foreground
+          hoverColor: Color.accent
+          onClicked: {
+            if (!root.editing) root.resetEditor()
+            root.confirmingRemove = false
+            root.editing = !root.editing
+          }
+        }
+
+        PanelActionButton {
           iconText: "󰆴"
           tooltipText: "Stop keeping this folder on this device"
           fontSize: Style.font.body
           foreground: root.confirmingRemove ? Color.urgent : root.dim
           hoverColor: Color.urgent
-          onClicked: root.confirmingRemove = !root.confirmingRemove
+          onClicked: {
+            root.editing = false
+            root.confirmingRemove = !root.confirmingRemove
+          }
         }
       }
     }
@@ -171,6 +198,67 @@ CursorSurface {
       Layout.topMargin: Style.space(2)
       Layout.bottomMargin: Style.space(4)
       spacing: Style.space(6)
+
+      // Rename: a display name for the widget and the CLI, the folder's own name when empty
+      BorderSurface {
+        visible: root.editing
+        Layout.fillWidth: true
+        implicitHeight: editCol.implicitHeight + Style.space(16)
+        radius: Style.cornerRadius
+        color: Qt.rgba(1, 1, 1, 0.04)
+        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+
+        ColumnLayout {
+          id: editCol
+          anchors {
+            fill: parent
+            margins: Style.space(8)
+          }
+          spacing: Style.space(6)
+
+          Text {
+            text: "Display name"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Qt.darker(root.foreground, 1.4)
+          }
+
+          TextField {
+            id: labelInput
+            Layout.fillWidth: true
+            placeholderText: root.folder.defaultName || ""
+            onAccepted: if (root.hasEdits) root.applyEdits()
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Button {
+              text: "Save"
+              iconText: "󰄬"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: true
+              enabled: root.hasEdits
+              opacity: enabled ? 1.0 : 0.45
+              onClicked: root.applyEdits()
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+              text: "Cancel"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: false
+              onClicked: root.editing = false
+            }
+          }
+        }
+      }
 
       // Progress while syncing
       ColumnLayout {
