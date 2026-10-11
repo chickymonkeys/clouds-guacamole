@@ -125,7 +125,7 @@ Remotes already in your rclone config appear as drives right away, not streamed 
   - problems, with a one-click fix: *Retry*, *Reconnect account*, *Take over*, *Set up my own client*;
   - rename, move, your own client and remove, behind 󰇘;
   - its local folders, in a dropdown.
-- **Local folders.** A drive's folders sit behind one line with how many there are and what they are doing: *all synced*, *2 syncing*, *1 needs you*. Click it to list them, one line each with its state. Hover a folder for *Sync now*, *Open*, *Pause* and *Stop*, and its name for where it syncs. Progress, conflicts and anything that needs you show under it. Folders with conflicts or a problem stay listed while the list is closed, so nothing that needs you is behind a click. The panel remembers which lists you opened, and adding a folder opens its drive's list.
+- **Local folders.** A drive's folders sit behind one line with how many there are and what they are doing: *all synced*, *2 syncing*, *1 needs you*. Click it to list them, one line each with its state. Hover a folder for *Sync now*, *Open*, *Pause*, *Rename* and *Stop*, and its name for where it syncs. *Rename* gives a folder a display name of your own; leave it empty for the folder's own name. Progress, conflicts and anything that needs you show under it. Folders with conflicts or a problem stay listed while the list is closed, so nothing that needs you is behind a click. The panel remembers which lists you opened, and adding a folder opens its drive's list.
 - **Settings.** Stream and sync locations, cache size, sync interval, backup retention and notifications. The **Engine** row has:
   - *Restart* (rclone);
   - *Log*, an in-panel viewer for Guacamole's and rclone's logs, with a problems-only filter, copy and open;
@@ -164,6 +164,7 @@ guac keep Drive:Documents/Notes [~/Notes]   # keep a folder on this device
 guac unkeep Drive:Documents/Notes [--delete-local]
 guac sync [FOLDER]                      # sync now
 guac pause|resume FOLDER
+guac alias FOLDER "Team notes"          # display name; empty: the folder's own name
 guac resolve FOLDER resync|force|dismiss
 guac browse Drive:Documents             # list folders
 guac size Drive:Documents/Notes
@@ -181,7 +182,7 @@ guac daemon [--ensure] | guac stop | guac watch
 guac service install|uninstall
 ```
 
-`FOLDER` is a folder id, `REMOTE:PATH`, or the local path.
+`FOLDER` is a folder id, its alias, `REMOTE:PATH`, or the local path.
 
 ## Files
 
