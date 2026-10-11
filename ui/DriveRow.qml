@@ -20,6 +20,8 @@ Item {
   property bool confirmingRemove: false
   // Whether the local folders are listed; the panel keeps it, so it outlives this card
   property bool foldersOpen: false
+  // Off while the panel is closed: spinners in a hidden window still tick
+  property bool animate: true
 
   signal keepFolderRequested(string remote)
   signal clientIdRequested(string remote)
@@ -505,6 +507,7 @@ Item {
       foreground: root.foreground
       fontFamily: root.fontFamily
       home: root.home
+      animate: root.animate
       onToggled: root.foldersToggled()
       onKeepFolderRequested: root.keepFolderRequested(root.drive.name)
     }

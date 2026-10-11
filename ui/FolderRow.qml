@@ -15,6 +15,8 @@ CursorSurface {
   property string home: ""
   property bool confirmingRemove: false
   property bool editing: false
+  // Off while the panel is closed: spinners in a hidden window still tick
+  property bool animate: true
 
   readonly property color dim: Qt.darker(foreground, 1.6)
   readonly property string state_: folder.state || ""
@@ -96,7 +98,7 @@ CursorSurface {
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           RotationAnimation on rotation {
-            running: root.syncing
+            running: root.syncing && root.animate && root.visible
             from: 0
             to: 360
             duration: 1100
@@ -276,7 +278,7 @@ CursorSurface {
           property real sweep: 0
 
           SequentialAnimation on sweep {
-            running: root.syncing && root.progress < 0
+            running: root.syncing && root.progress < 0 && root.animate && root.visible
             loops: Animation.Infinite
             NumberAnimation { from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad }
             NumberAnimation { from: 1; to: 0; duration: 900; easing.type: Easing.InOutQuad }

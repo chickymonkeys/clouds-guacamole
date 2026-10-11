@@ -133,6 +133,8 @@ Panel {
         urgent: root.urgent
         fontFamily: root.fontFamily
         statusColor: root.statusColor
+        // Through the fade-out too, while the window is still mapped
+        animate: panel.visible
       }
     }
   }

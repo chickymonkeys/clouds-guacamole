@@ -15,6 +15,8 @@ Item {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
   property color statusColor: foreground
+  // Whether anyone can see the panel: its spinners stop while it is closed
+  property bool animate: true
 
   // "drives" | "add" | "settings" | "browse" | "client" | "log"
   property string currentView: "drives"
@@ -193,6 +195,7 @@ Item {
               active: root.service.statusState === "online"
               busy: root.service.busy
               attention: root.service.attention
+              animate: root.animate
             }
           }
 
@@ -306,6 +309,7 @@ Item {
             fontFamily: root.fontFamily
             home: root.service.home
             mountRoot: root.service.mountRoot
+            animate: root.animate
             foldersOpen: root.openFolderLists[drive.name] === true
             onFoldersToggled: {
               var open = !foldersOpen
