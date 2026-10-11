@@ -49,6 +49,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(entry["hidden_hints"], ["3", "shared_app"])
         self.assertEqual(config.normalize_remote({})["hidden_hints"], [])
 
+    def test_folder_alias(self) -> None:
+        from guac import config
+
+        folders = config.normalize_remote(
+            {
+                "folders": [
+                    {"id": "a", "local": "/x", "label": "  Thesis  "},
+                    {"id": "b", "local": "/y", "label": "   "},
+                    {"id": "c", "local": "/z", "label": 7},
+                    {"id": "d", "local": "/w"},
+                ]
+            }
+        )["folders"]
+        self.assertEqual([f["label"] for f in folders], ["Thesis", None, None, None])
+
     def test_config_is_private(self) -> None:
         from guac import config
 

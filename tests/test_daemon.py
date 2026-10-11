@@ -248,6 +248,51 @@ def test_keep_local_sync(sb: Sandbox) -> None:
     sb._fid = fid  # for the following scenarios
 
 
+def test_folder_alias(sb: Sandbox) -> None:
+    fid = sb._fid
+    f = sb.folder(fid)
+    assert f["name"] == f["defaultName"] == "docs" and f["label"] == "", f
+    sb.ok("set_folder", id=fid, label="  Team docs  ")
+    f = sb.folder(fid)
+    assert f["name"] == f["label"] == "Team docs" and f["defaultName"] == "docs", f
+    cfg_file = sb.tmp / "cfg" / "guacamole" / "config.json"
+    spec = json.loads(cfg_file.read_text())["remotes"]["CloudB"]["folders"][0]
+    assert spec["label"] == "Team docs", "the alias is saved"
+
+    # The CLI sets it, finds the folder by it and shows it
+    def guac(*argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(REPO / "bin" / "guac"), *argv],
+            env=sb.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    r = guac("alias", "CloudB:docs", "Shared notes")
+    assert r.returncode == 0, r.stderr
+    assert sb.folder(fid)["name"] == "Shared notes"
+    r = guac("pause", "Shared notes")
+    assert r.returncode == 0 and sb.folder(fid)["paused"], r.stderr
+    r = guac("resume", "Shared notes")
+    assert r.returncode == 0 and not sb.folder(fid)["paused"], r.stderr
+    r = guac("status")
+    assert r.returncode == 0 and "Shared notes docs → " in r.stdout, r.stdout
+
+    # Empty, or the folder's own name, falls back to the folder's name
+    r = guac("alias", "Shared notes")
+    assert r.returncode == 0, r.stderr
+    f = sb.folder(fid)
+    assert f["name"] == "docs" and f["label"] == "", f
+    sb.ok("set_folder", id=fid, label="docs")
+    assert sb.folder(fid)["label"] == ""
+    spec = json.loads(cfg_file.read_text())["remotes"]["CloudB"]["folders"][0]
+    assert spec["label"] is None, "a cleared alias isn't saved"
+    reply = sb.request("set_folder", id="nope", label="x")
+    assert not reply["ok"], "an unknown folder is refused"
+
+
 def test_conflict(sb: Sandbox) -> None:
     fid = sb._fid
     local = Path(sb.folder(fid)["local"])
@@ -556,6 +601,7 @@ SCENARIOS = [
     test_stream,
     test_busy_unmount,
     test_keep_local_sync,
+    test_folder_alias,
     test_conflict,
     test_safety_stop,
     test_recent,

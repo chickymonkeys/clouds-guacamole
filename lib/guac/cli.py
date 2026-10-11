@@ -106,8 +106,9 @@ def print_status(state: dict[str, Any]) -> None:
             if st == "syncing" and f.get("progress", {}).get("totalTransfers"):
                 p = f["progress"]
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
+            alias = f"{c(BOLD, f['label'])} " if f.get("label") else ""
             print(
-                f"    {c(DIM, '└')} {f['path'] or '/'} → {f['local']}  {c(col, detail)}  {c(DIM, f['id'])}"
+                f"    {c(DIM, '└')} {alias}{f['path'] or '/'} → {f['local']}  {c(col, detail)}  {c(DIM, f['id'])}"
             )
             if f.get("attention"):
                 print(c(RED, f"        {f['attention']}"))
@@ -164,6 +165,7 @@ def _find_folder(spec: str) -> str:
         for f in d.get("folders", []):
             if spec in (
                 f["id"],
+                f.get("label"),
                 f"{f['remote']}:{f['path']}",
                 f["local"],
                 os.path.abspath(os.path.expanduser(spec)),
@@ -326,7 +328,7 @@ def main(argv: list[str] | None = None) -> None:
         "unkeep",
         help="Stop keeping a folder local (local files stay unless --delete-local)",
     )
-    s.add_argument("folder", help="Folder id, REMOTE:PATH or local path")
+    s.add_argument("folder", help="Folder id, alias, REMOTE:PATH or local path")
     s.add_argument(
         "--delete-local",
         action="store_true",
@@ -391,6 +393,11 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("label", help="Display name for a drive")
     s.add_argument("remote")
     s.add_argument("label")
+    s = sub.add_parser(
+        "alias", help="Display name for a folder kept local (empty: its own name)"
+    )
+    s.add_argument("folder", help="Folder id, alias, REMOTE:PATH or local path")
+    s.add_argument("alias", nargs="?", default="")
     s = sub.add_parser("set-path", help="Where a drive is mounted (empty: default)")
     s.add_argument("remote")
     s.add_argument("path")
@@ -569,6 +576,8 @@ def main(argv: list[str] | None = None) -> None:
         _run("remove_remote", {"remote": a.remote})
     elif a.cmd == "label":
         _run("set_drive", {"remote": a.remote, "label": a.label})
+    elif a.cmd == "alias":
+        _run("set_folder", {"id": _find_folder(a.folder), "label": a.alias})
     elif a.cmd == "set-path":
         _run("set_drive", {"remote": a.remote, "mount_path": a.path})
     elif a.cmd == "config":
