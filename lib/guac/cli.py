@@ -103,6 +103,8 @@ def print_status(state: dict[str, Any]) -> None:
                 "waiting": YELLOW,
             }.get(st, "")
             detail = f"synced {_ago(f['lastSync'])}" if st == "synced" else st
+            if st == "paused" and f.get("localChanges"):
+                detail = "paused, changes waiting"
             if st == "syncing" and f.get("progress", {}).get("totalTransfers"):
                 p = f["progress"]
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
@@ -336,10 +338,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     s = sub.add_parser("sync", help="Sync folders kept local now")
     s.add_argument("folder", nargs="?", default="")
-    s = sub.add_parser("pause", help="Pause syncing a folder")
-    s.add_argument("folder")
-    s = sub.add_parser("resume", help="Resume syncing a folder")
-    s.add_argument("folder")
+    s = sub.add_parser(
+        "pause", help="Pause syncing folders, to work offline (nothing syncs)"
+    )
+    s.add_argument("folder", nargs="+")
+    s = sub.add_parser("resume", help="Resume syncing folders, catching up at once")
+    s.add_argument("folder", nargs="+")
     s = sub.add_parser("resolve", help="Act on a folder that needs attention")
     s.add_argument("folder")
     s.add_argument("action", choices=["force", "resync", "dismiss"])
@@ -478,7 +482,8 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd == "sync":
         _run("sync_now", {"id": _find_folder(a.folder)} if a.folder else {})
     elif a.cmd in ("pause", "resume"):
-        _run("pause_folder", {"id": _find_folder(a.folder), "paused": a.cmd == "pause"})
+        for fid in [_find_folder(f) for f in a.folder]:
+            _run("pause_folder", {"id": fid, "paused": a.cmd == "pause"})
     elif a.cmd == "resolve":
         _run("resolve", {"id": _find_folder(a.folder), "action": a.action})
     elif a.cmd == "browse":
