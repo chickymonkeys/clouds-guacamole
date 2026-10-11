@@ -82,6 +82,8 @@ Item {
   property int pendingRequests: 0
 
   signal stateUpdated()
+  // Asked from a folder: the panel shows Settings with the global never-sync list open
+  signal filtersRequested()
   signal replied(int id, bool ok, var data, string error)
 
   property int _nextId: 1
@@ -242,6 +244,7 @@ Item {
   function setExcludes(id, patterns) {
     act("set_excludes", id ? { id: id, patterns: patterns } : { patterns: patterns }, "Saving…")
   }
+  function showFilters() { filtersRequested() }
   function syncNow(id) { act("sync_now", id ? { id: id } : {}, "") }
   function resolveFolder(id, action) { act("resolve", { id: id, action: action }, "") }
   function clearConflicts(id) { request("clear_conflicts", { id: id }) }

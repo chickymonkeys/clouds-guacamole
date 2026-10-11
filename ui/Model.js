@@ -156,3 +156,107 @@ function getProvider(id) {
   }
   return null
 }
+
+// ------------------------------------------------------------ never-synced patterns
+// rclone glob patterns, as the daemon accepts them (lib/guac/filters.py)
+
+function patternProblem(p) {
+  if (p.indexOf("+ ") === 0) return "Only never-sync patterns go here; include rules belong in filters.txt"
+  if (p.indexOf("{{") !== -1) return "Regular expressions ({{…}}) can only go in filters.txt"
+  if (p.length > 300) return "That pattern is too long"
+  var braces = 0
+  for (var i = 0; i < p.length; i++) {
+    var c = p.charAt(i)
+    if (c === "\\") {
+      if (i + 1 >= p.length) return "A pattern can't end with \\"
+      i++
+    } else if (c === "[") {
+      var from = (p.charAt(i + 1) === "!" || p.charAt(i + 1) === "^") ? i + 3 : i + 2
+      var end = p.indexOf("]", from - 1)
+      if (end < 0) return "Close the [ with a ]"
+      i = end
+    } else if (c === "{") {
+      braces++
+    } else if (c === "}" && braces > 0) {
+      braces--
+    }
+  }
+  if (braces > 0) return "Close the { with a }"
+  return ""
+}
+
+// Comma- or line-separated patterns; commas inside {a,b} or [...] belong to the pattern
+function splitPatterns(text) {
+  var out = [], cur = "", depth = 0
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charAt(i)
+    if (c === "\\" && i + 1 < text.length) { cur += c + text.charAt(++i); continue }
+    if (c === "{" || c === "[") depth++
+    else if ((c === "}" || c === "]") && depth > 0) depth--
+    if ((c === "," && depth === 0) || c === "\n") { out.push(cur); cur = ""; continue }
+    cur += c
+  }
+  out.push(cur)
+  return out.map(function(p) { return p.trim().replace(/^- /, "").trim() })
+            .filter(function(p) { return p !== "" })
+}
+
+function explainPattern(p) {
+  var anchored = p.charAt(0) === "/"
+  var body = anchored ? p.slice(1) : p
+  var folder = false
+  if (/\/\*\*$/.test(body)) { folder = true; body = body.slice(0, -3) }
+  else if (/\/$/.test(body)) { folder = true; body = body.slice(0, -1) }
+  if (body === "" || body === "**") return "Everything"
+  var wild = /[*?\[\]{}]/.test(body)
+  var nested = body.indexOf("/") !== -1
+  var where = anchored ? (nested ? "from the folder's top" : "at the top level only")
+                       : "anywhere in the folder"
+  var what
+  var m
+  if (folder) {
+    what = (wild ? "Folders matching " : "Folders named ") + body + " and everything in them"
+  } else if ((m = /^\*\.([^*?\[\]{}\/]+)$/.exec(body))) {
+    what = "Files ending in ." + m[1]
+  } else if ((m = /^\*\.\{([^{}\/]+)\}$/.exec(body))) {
+    what = "Files ending in ." + m[1].split(",").join(" or .")
+  } else if ((m = /^([^*?\[\]{}\/]+)\*$/.exec(body))) {
+    what = "Names starting with " + m[1]
+  } else if (!wild && !nested) {
+    what = "Files named " + body
+  } else {
+    what = (nested ? "Paths matching " : "Names matching ") + body
+  }
+  return what + ", " + where
+}
+
+// What a text field holds, read as patterns to add: { patterns, explained, error }
+function parsePatterns(text, existing) {
+  var list = splitPatterns(String(text || ""))
+  var res = { patterns: [], explained: [], error: "" }
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    var problem = patternProblem(p)
+    if (!problem && ((existing || []).indexOf(p) !== -1 || res.patterns.indexOf(p) !== -1))
+      problem = p + " is already in the list"
+    if (problem) {
+      res.error = problem
+      return res
+    }
+    res.patterns.push(p)
+    res.explained.push((list.length > 1 ? p + ": " : "") + explainPattern(p))
+  }
+  return res
+}
+
+// The note above Save: what changes, and that the next sync is a safe one
+function filterChangeText(added, removed, modeChange, emptied) {
+  var parts = []
+  if (emptied) parts.push("Empty: this folder goes back to the global list")
+  else if (modeChange) parts.push(modeChange)
+  if (!emptied) {
+    if (added) parts.push(added + " added")
+    if (removed) parts.push(removed + " removed")
+  }
+  return parts.join(" · ") + ". The next sync is a safe resync: nothing is deleted and the newer copy wins."
+}
