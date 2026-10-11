@@ -15,7 +15,7 @@ MAX_PATTERN_LENGTH = 300
 
 OVERRIDE_HEADER = """\
 # Written by Guacamole: this folder's own never-synced patterns, used instead of filters.txt.
-# Change them in the widget (the folder's 󰏫 editor) or with `guac exclude`.
+# Change them in the widget (the folder's 󰈲 action) or with `guac exclude`.
 """
 
 
