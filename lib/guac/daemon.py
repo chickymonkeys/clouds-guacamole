@@ -1403,6 +1403,7 @@ class Daemon:
 
     async def _poll_job(self, f: Folder) -> None:
         group = f"guac/{f.id}"
+        job = f.job_id
         w = self.workers.get(f.id)
         lost = w is None or w.proc.returncode is not None
         if w is not None and not lost:
@@ -1414,6 +1415,8 @@ class Daemon:
                 lost = "not found" in str(e).lower() or isinstance(e, RcUnavailable)
                 if not lost:
                     return
+        if f.job_id != job:
+            return  # cancelled meanwhile (removed, or shutting down)
         if lost or w is None:
             log.warning("sync %s lost its rclone process; retrying", f.id)
             await self._stop_worker(f.id)
@@ -2002,12 +2005,12 @@ class Daemon:
         return self.remote_cfg(f.remote).get("label") or f.remote
 
     def _folder_state(self, f: Folder, now: float) -> dict[str, Any]:
-        if f.paused:
+        if f.job_id:
+            state = "syncing"  # also while paused: the sync under way still ends
+        elif f.paused:
             state = "paused"
         elif f.attention:
             state = "attention"
-        elif f.job_id:
-            state = "syncing"
         elif f.waiting_network:
             state = "waiting"
         elif f.error and f.retry_at > now:
@@ -2029,6 +2032,8 @@ class Daemon:
             "local": f.local,
             "state": state,
             "paused": f.paused,
+            # Local edits not synced yet: while paused, what resuming will catch up
+            "localChanges": bool(f.dirty_since and not f.followup_only),
             "initialized": f.initialized,
             "lastSync": int(f.last_sync),
             "lastChanges": f.last_changes,
@@ -2715,18 +2720,45 @@ class Daemon:
         return {"message": message}
 
     async def cmd_pause_folder(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Pause: no rclone runs for the folder until resumed, so it can be worked on offline.
+
+        Local edits are still watched, so resuming knows they wait. Resuming runs one normal
+        bisync at once: changes from both sides meet there with the usual safety stop and
+        conflict copies, and nothing is forced or resynced.
+        """
         f = self._folder(args)
         paused = bool(args.get("paused", True))
+        name = f.label or self._folder_default_name(f)
+        if paused == f.paused:
+            return {"message": f"{name} is already {'paused' if paused else 'syncing'}"}
         for spec in self.remote_cfg(f.remote)["folders"]:
             if spec["id"] == f.id:
                 spec["paused"] = paused
         self.save_cfg()
         f.paused = paused
-        if not paused:
-            f.next_due = 0
+        if paused:
+            # A sync under way is left to finish: stopping bisync part way loses its listings,
+            # and the resync that repairs them brings back files deleted while paused
+            f.rerun = False
+            message = (
+                f"Paused {name} once the sync under way ends; nothing else syncs until you resume"
+                if f.job_id
+                else f"Paused {name}; nothing syncs until you resume"
+            )
+        else:
+            # Catch up now, whatever error or backoff was pending before the pause
+            f.retry_at, f.backoff, f.next_due = 0, 0, 0
+            f.error = f.error_kind = ""
+            if not f.watching:
+                self._watch_folder(f)
             self.wake()
+            message = (
+                f"Resumed {name}; it needs attention first"
+                if f.attention
+                else f"Resumed {name}; catching up now"
+            )
         self.mark()
-        return {"message": "Paused" if paused else "Resumed"}
+        return {"message": message}
 
     async def cmd_set_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
@@ -2744,8 +2776,15 @@ class Daemon:
         targets = (
             [self._folder(args)] if args.get("id") else list(self.folders.values())
         )
+        if args.get("id") and targets[0].paused:
+            f = targets[0]
+            raise UserError(
+                f"{f.label or self._folder_default_name(f)} is paused; resume it to sync"
+            )
+        paused = 0
         for f in targets:
             if f.paused:
+                paused += 1
                 continue
             f.retry_at, f.backoff, f.next_due = 0, 0, 0
             f.error = ""
@@ -2753,7 +2792,11 @@ class Daemon:
             f.rerun = bool(f.job_id)
         self.wake()
         self.mark()
-        return {"message": "Syncing now" if targets else "No folders are kept local"}
+        if not targets:
+            return {"message": "No folders are kept local"}
+        if paused == len(targets):
+            return {"message": "All folders are paused; nothing to sync"}
+        return {"message": "Syncing now" + (f" ({paused} paused)" if paused else "")}
 
     async def cmd_resolve(self, args: dict[str, Any]) -> dict[str, Any]:
         """Act on a folder that needs attention: force (apply), resync (restore, never deletes), dismiss."""

@@ -171,6 +171,38 @@ def wait(cond, timeout: float, what: str, interval: float = 0.2):
     )
 
 
+def guac_cli(sb: Sandbox, *argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(REPO / "bin" / "guac"), *argv],
+        env=sb.env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def sync_running(sb: Sandbox, fid: str) -> bool:
+    return (sb.run / "guacamole" / f"sync-{fid}.sock").exists()
+
+
+def settle(sb: Sandbox, fid: str, quiet: float = 12.0) -> None:
+    """Wait out the follow-up check a sync's own downloads schedule, so the next scenario
+    doesn't race it."""
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+
+    def lines() -> int:
+        return log.read_text(errors="replace").count(f"sync {fid} ")
+
+    seen, since = lines(), time.monotonic()
+    deadline = since + 60
+    while time.monotonic() - since < quiet or sync_running(sb, fid):
+        assert time.monotonic() < deadline, "folder never went quiet"
+        time.sleep(0.3)
+        if (n := lines()) != seen:
+            seen, since = n, time.monotonic()
+
+
 # --------------------------------------------------------------------------- scenarios
 
 
@@ -261,14 +293,7 @@ def test_folder_alias(sb: Sandbox) -> None:
 
     # The CLI sets it, finds the folder by it and shows it
     def guac(*argv: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(REPO / "bin" / "guac"), *argv],
-            env=sb.env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        return guac_cli(sb, *argv)
 
     r = guac("alias", "CloudB:docs", "Shared notes")
     assert r.returncode == 0, r.stderr
@@ -291,6 +316,112 @@ def test_folder_alias(sb: Sandbox) -> None:
     assert spec["label"] is None, "a cleared alias isn't saved"
     reply = sb.request("set_folder", id="nope", label="x")
     assert not reply["ok"], "an unknown folder is refused"
+
+
+def test_paused_roundtrip(sb: Sandbox) -> None:
+    fid = sb._fid
+    local = Path(sb.folder(fid)["local"])
+    cloud = sb.remote_b / "docs"
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+    wait(lambda: sb.folder(fid)["state"] == "synced", 30, "settled before pausing")
+
+    try:
+        r = guac_cli(sb, "pause", fid)
+        assert r.returncode == 0 and "Paused" in r.stdout, r.stdout + r.stderr
+        f = sb.folder(fid)
+        assert f["paused"] and f["state"] == "paused" and not f["localChanges"], f
+        mark = log.stat().st_size
+
+        # Offline work: edits on both sides, and every way a sync is usually started
+        (local / "one.md").write_text("doc one\nwritten offline\n")
+        (local / "offline.md").write_text("new while paused\n")
+        (cloud / "sub" / "two.md").write_text("deep\ncloud edit while paused\n")
+        (cloud / "cloud-new.md").write_text("new in the cloud\n")
+        time.sleep(1.1)
+        assert "paused" in sb.request("sync_now")["message"]
+        r = guac_cli(sb, "sync", fid)
+        assert r.returncode != 0 and "paused" in r.stderr, r.stdout + r.stderr
+        wait(lambda: sb.folder(fid)["localChanges"], 10, "local edits noticed")
+        deadline = time.monotonic() + 10  # well past the 4s debounce after local edits
+        while time.monotonic() < deadline:
+            assert not sync_running(sb, fid), "no rclone runs for a paused folder"
+            time.sleep(0.2)
+        since = log.read_bytes()[mark:].decode(errors="replace")
+        assert f"sync {fid} (" not in since, since
+        assert "written offline" not in (cloud / "one.md").read_text()
+        assert (
+            not (cloud / "offline.md").exists()
+            and not (local / "cloud-new.md").exists()
+        )
+        assert "while paused" not in (local / "sub" / "two.md").read_text()
+        assert sb.folder(fid)["state"] == "paused"
+        r = guac_cli(sb, "status")
+        assert "paused, changes waiting" in r.stdout, r.stdout
+    except BaseException:
+        sb.request("pause_folder", id=fid, paused=False)
+        raise
+
+    # Resume: one ordinary bisync (no resync, no force) brings both sides together
+    mark = log.stat().st_size
+    r = guac_cli(sb, "resume", fid)
+    assert r.returncode == 0 and "catching up" in r.stdout, r.stdout + r.stderr
+
+    def since_mark() -> str:
+        return log.read_bytes()[mark:].decode(errors="replace")
+
+    wait(lambda: f"sync {fid} done" in since_mark(), 30, "catch-up sync")
+    text = since_mark()
+    catchup = text[: text.index(f"sync {fid} done")]
+    assert catchup.count(f"sync {fid} (") == 1, catchup
+    assert "[resync]" not in catchup, "catching up is a normal sync"
+    assert (cloud / "one.md").read_text() == "doc one\nwritten offline\n"
+    assert (cloud / "offline.md").read_text() == "new while paused\n"
+    assert (local / "sub" / "two.md").read_text() == "deep\ncloud edit while paused\n"
+    assert (local / "cloud-new.md").read_text() == "new in the cloud\n"
+    assert not list(local.rglob("*.conflict*")), "nothing conflicted"
+    f = sb.folder(fid)
+    assert not f["paused"] and f["state"] in ("synced", "changes", "syncing"), f
+    wait(lambda: sb.folder(fid)["state"] == "synced", 40, "settled after catch-up")
+    settle(sb, fid)
+
+
+def test_pause_while_syncing(sb: Sandbox) -> None:
+    (sb.remote_b / "bulk").mkdir()
+    (sb.remote_b / "bulk" / "seed.md").write_text("seed\n")
+    fid = sb.ok("add_folder", remote="CloudB", path="bulk")["id"]
+    wait(lambda: sb.folder(fid)["state"] == "synced", 30, "first sync")
+    local = Path(sb.folder(fid)["local"])
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+    for i in range(3000):
+        (sb.remote_b / "bulk" / f"f{i}.txt").write_text(f"{i}\n")
+    time.sleep(1.1)
+    mark = log.stat().st_size
+    sb.ok("sync_now", id=fid)
+    wait(lambda: sync_running(sb, fid), 10, "sync started")
+
+    # The sync under way ends normally (stopping bisync part way would force a resync)
+    reply = sb.request("pause_folder", id=fid, paused=True)
+    assert reply["ok"] and "once the sync under way ends" in reply["message"], reply
+    wait(lambda: sb.folder(fid)["state"] == "paused", 60, "sync finished, then paused")
+    assert len(list(local.glob("f*.txt"))) == 3000
+    (local / "edited-offline.txt").write_text("offline\n")
+    time.sleep(8)
+    text = log.read_bytes()[mark:].decode(errors="replace")
+    assert text.count(f"sync {fid} (") == 1, "nothing starts after pausing"
+    assert not sync_running(sb, fid)
+    assert not (sb.remote_b / "bulk" / "edited-offline.txt").exists()
+
+    mark = log.stat().st_size
+    sb.ok("pause_folder", id=fid, paused=False)
+    wait(
+        lambda: (sb.remote_b / "bulk" / "edited-offline.txt").exists(),
+        30,
+        "caught up after resuming",
+    )
+    wait(lambda: sb.folder(fid)["state"] == "synced", 30, "settled after catch-up")
+    text = log.read_bytes()[mark:].decode(errors="replace")
+    assert "[resync]" not in text and "failed" not in text, text
+    sb.ok("remove_folder", id=fid)
 
 
 def test_conflict(sb: Sandbox) -> None:
@@ -602,6 +733,8 @@ SCENARIOS = [
     test_busy_unmount,
     test_keep_local_sync,
     test_folder_alias,
+    test_paused_roundtrip,
+    test_pause_while_syncing,
     test_conflict,
     test_safety_stop,
     test_recent,
