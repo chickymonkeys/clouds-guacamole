@@ -35,6 +35,7 @@ On a drive card, open **Local folders** and choose **Keep a folder on this devic
 - **Conflicts never lose data.** If a file changed on both sides, the newer copy wins and the other is kept next to it as `name.conflict1.ext`. The folder lists its conflicts and you get a notification.
 - **Safety stop.** If most files disappear on one side (a wiped disk, an unmounted drive, a sync gone wrong), nothing is propagated. The folder asks you to choose between **Resync**, which merges both sides again and never deletes, and **Sync anyway**.
 - **Replaced local files are kept** for 30 days under `~/.local/state/guacamole/backups/` (Settings → Engine → Backups).
+- **Pause a folder to work offline**, or while you change many files and don't want each save uploaded. Nothing syncs and no rclone runs for it until you resume. A sync already under way finishes first, since stopping bisync part way would force a resync. The folder still notices your edits and says *paused, changes waiting*. Resuming runs one ordinary sync at once that brings both sides together, with the same conflict copies and safety stop as any other sync.
 - Editor temp files, `.DS_Store`, `Thumbs.db`, Obsidian's per-device `workspace.json` and similar files are never synced. The list is in `~/.config/guacamole/filters.txt` (Settings → Engine → Filters).
 
 <table>
@@ -163,7 +164,7 @@ guac stream-all on|off
 guac keep Drive:Documents/Notes [~/Notes]   # keep a folder on this device
 guac unkeep Drive:Documents/Notes [--delete-local]
 guac sync [FOLDER]                      # sync now
-guac pause|resume FOLDER
+guac pause|resume FOLDER...             # pause to work offline; resume catches up at once
 guac alias FOLDER "Team notes"          # display name; empty: the folder's own name
 guac resolve FOLDER resync|force|dismiss
 guac browse Drive:Documents             # list folders
@@ -208,6 +209,7 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 
 - streaming and write-through, busy unmount, cleanup of empty mount folders;
 - keeping folders local: syncing in both directions, deletions, conflicts, the safety stop and resync, and folders of one drive syncing in parallel;
+- pausing a folder: no rclone runs while paused, edits on both sides wait, and resuming catches up with one normal sync;
 - recent files;
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;
