@@ -52,6 +52,8 @@ On a drive card, open **Local folders** and choose **Keep a folder on this devic
 
 Under the hood this is `rclone bisync` with `--resilient --recover`, `--conflict-resolve newer`, a 50% max-delete threshold and a local backup directory. Google Docs files are skipped, since they have no real size and can't round-trip.
 
+Missing sync listings trigger one automatic safe resync. If that repair fails, or the next ordinary sync still needs a repair, the folder stops and offers **Resync** in the widget. The repair state survives restarting the daemon. Network and rate-limit failures keep their delayed retries; expired sign-in offers **Reconnect account**. Conflicts remain listed even if a later part of the sync fails, and **Clear** forgets the notice while keeping the files.
+
 Streaming and keeping folders are independent: a drive can be streamed, have local folders, both, or neither. A folder you keep is also visible inside the streamed drive. Work in the local copy; edits made through the stream reach it on the next sync.
 
 ## Your own OAuth client
@@ -205,6 +207,7 @@ Accounts and credentials stay in rclone's own config (`~/.config/rclone/rclone.c
 ```bash
 tests/test_config.py   # settings, provider guides and client checks, path rules
 tests/test_daemon.py   # end-to-end: real FUSE mounts and bisync on throwaway local remotes
+python3 tests/test_recovery.py  # failure transitions, real local bisync jobs and the widget off-screen
 ```
 
 The end-to-end suite runs `guacd` against two local rclone `alias` remotes in temporary directories, with its own rclone config. It covers:
@@ -216,6 +219,8 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;
 - path and client validation, logs, and clean shutdown.
+
+The recovery suite needs no FUSE mounts. It covers safety-stop Resync and Sync anyway, missing listings, failed and repeated repairs across restart, transient backoff, conflicts from failed jobs, and the existing widget controls and visibility while folder lists are closed. Real-job tests need rclone; the widget check needs Quickshell and `/usr/share/omarchy/shell`. Those sections are reported as skipped if their dependencies are unavailable.
 
 The Python code is formatted and checked with [ruff](https://docs.astral.sh/ruff/) and [ty](https://docs.astral.sh/ty/) (`uv tool install ruff ty`; settings in `pyproject.toml`):
 

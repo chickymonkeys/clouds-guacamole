@@ -172,6 +172,10 @@ class Folder:
         False  # dirty only from events seen during the last run (mostly its own writes)
     )
     resync_reason: str = ""
+    run_resync: bool = (
+        False  # the running job's mode, independent of later filter edits
+    )
+    recovery_attempted: bool = False  # cleared only after an ordinary sync succeeds
     force_next: bool = False
     conflicts: list[str] = field(default_factory=list)
     watching: bool = False
@@ -1299,6 +1303,8 @@ class Daemon:
                     f.attention = str(saved.get("attention", ""))
                     f.attention_code = str(saved.get("attention_code", ""))
                     f.error = str(saved.get("error", ""))
+                    f.resync_reason = str(saved.get("resync_reason", ""))
+                    f.recovery_attempted = bool(saved.get("recovery_attempted"))
                     # Saved by older versions: one digest of filters.txt for every folder
                     f.filters_md5 = str(
                         saved.get("filters_md5") or self._legacy_filters_md5
@@ -1337,6 +1343,8 @@ class Daemon:
             "attention_code": f.attention_code,
             "error": f.error,
             "filters_md5": f.filters_md5,
+            "resync_reason": f.resync_reason,
+            "recovery_attempted": f.recovery_attempted,
         }
         config.save_state(self.st)
 
@@ -1351,6 +1359,8 @@ class Daemon:
                 "attention_code": f.attention_code,
                 "error": f.error,
                 "filters_md5": f.filters_md5,
+                "resync_reason": f.resync_reason,
+                "recovery_attempted": f.recovery_attempted,
             }
         config.save_state(self.st)
 
@@ -1494,6 +1504,11 @@ class Daemon:
             params["resyncMode"] = "newer"
         if f.force_next:
             params["force"] = True
+        f.run_resync = bool(params.get("resync"))
+        if f.run_resync and f.resync_reason == "recover":
+            # Survives an interruption or restart between the repair and the next sync.
+            f.recovery_attempted = True
+            self._persist_folder(f)
         worker = await self._start_worker(f)
         try:
             res = await self.rc("sync/bisync", params, timeout=30, client=worker.rcc)
@@ -1594,13 +1609,25 @@ class Daemon:
         text = str(out.get("output", "")) if isinstance(out, dict) else ""
         err = str(js.get("error") or "")
         now = time.time()
-        was_resync = bool(f.resync_reason) or not f.initialized
+        was_resync = f.run_resync
         rerun, f.rerun = f.rerun, False
         f.job_id, f.progress = 0, {}
         conflicts = _parse_conflicts(text)
+        # A later error doesn't undo conflict copies made earlier in this run.
+        if conflicts:
+            f.conflicts = (conflicts + [c for c in f.conflicts if c not in conflicts])[
+                :20
+            ]
+            self.notify(
+                f"conflict:{f.id}",
+                f"Sync conflict in {f.label or os.path.basename(f.local)}",
+                "Kept both versions: " + ", ".join(conflicts[:3]),
+            )
         if js.get("success"):
             first_sync = not f.initialized
             f.initialized, f.resync_reason = True, ""
+            if not was_resync:
+                f.recovery_attempted = False
             # Rules changed while this sync ran: one more resync, with the new ones
             f.filters_md5 = f.run_filters_md5
             self._check_filters(f)
@@ -1608,15 +1635,6 @@ class Daemon:
             f.error = f.error_kind = f.attention = f.attention_code = ""
             f.backoff = 0
             f.next_due = now if rerun else now + self.cfg["sync_interval_min"] * 60
-            if conflicts:
-                f.conflicts = (
-                    conflicts + [c for c in f.conflicts if c not in conflicts]
-                )[:20]
-                self.notify(
-                    f"conflict:{f.id}",
-                    f"Sync conflict in {f.label or os.path.basename(f.local)}",
-                    "Kept both versions: " + ", ".join(conflicts[:3]),
-                )
             if f.dirty_during_run:
                 f.dirty_since = now
                 f.last_event = now + FOLLOWUP_DEBOUNCE - DEBOUNCE
@@ -1630,8 +1648,16 @@ class Daemon:
                 f" [{len(conflicts)} conflict(s)]" if conflicts else "",
             )
         else:
-            detail = util.clean_error(err or text)
-            blob = (err + "\n" + text[-6000:]).lower()
+            critical = next(
+                (
+                    line
+                    for line in (err + "\n" + text).splitlines()
+                    if "critical error:" in line.lower()
+                ),
+                "",
+            )
+            detail = util.clean_error(critical or err or text)
+            blob = (err + "\n" + critical + "\n" + text[-6000:]).lower()
             transient = _transient_failure(blob)
             log.warning(
                 "sync %s failed: %s%s",
@@ -1648,26 +1674,24 @@ class Daemon:
                     f,
                     "safety",
                     "Safety stop: most files changed or were deleted on one side. "
-                    "Check both copies, then choose Sync anyway (applies it) or Resync (restores, never deletes).",
+                    + (
+                        "Check both copies, then choose Resync (restores, never deletes)."
+                        if f.resync_reason or not f.initialized
+                        else "Check both copies, then choose Sync anyway (applies it) or Resync (restores, never deletes)."
+                    ),
                 )
             elif "cannot sync to an empty directory" in blob:
                 self._folder_attention(
                     f,
                     "empty",
                     "One side is empty, so nothing was synced. "
-                    "Resync restores files to the empty side; Sync anyway would empty the other side too.",
+                    "Resync restores files to the empty side."
+                    + (
+                        ""
+                        if f.resync_reason or not f.initialized
+                        else " Sync anyway would empty the other side too."
+                    ),
                 )
-            elif not transient and (
-                "must run --resync" in blob
-                or "cannot find prior" in blob
-                or "md5 hash not found" in blob
-            ):
-                if was_resync:
-                    self._folder_attention(
-                        f, "resync_failed", "Could not repair the sync state: " + detail
-                    )
-                else:
-                    f.resync_reason, f.retry_at = "recover", now + 2
             elif "file name too long" in blob:
                 self._folder_attention(
                     f,
@@ -1688,9 +1712,6 @@ class Daemon:
                     f"The cloud folder '{f.path}' was not found. It may have been moved or deleted.",
                 )
             else:
-                if transient and f.initialized and "must run --resync" in blob:
-                    # Retried later; bisync won't run again without a resync
-                    f.resync_reason = f.resync_reason or "recover"
                 kind = transient or util.classify_error(blob)
                 if kind == "auth":
                     self._folder_attention(
@@ -1698,7 +1719,29 @@ class Daemon:
                         "auth",
                         "Sign-in expired or was revoked. Reconnect this account.",
                     )
+                    if "must run --resync" in blob:
+                        f.resync_reason = f.resync_reason or "recover"
+                elif kind not in ("network", "rate") and (
+                    was_resync
+                    or "must run --resync" in blob
+                    or "cannot find prior" in blob
+                    or "md5 hash not found" in blob
+                ):
+                    if was_resync or f.recovery_attempted:
+                        self._folder_attention(
+                            f,
+                            "resync_failed",
+                            "Could not repair the sync state: "
+                            + detail
+                            + ". Check both copies, then choose Resync to try again. Nothing will be deleted.",
+                        )
+                    else:
+                        f.resync_reason, f.retry_at = "recover", now + 2
+                        f.error = f.error_kind = ""
                 else:
+                    if f.initialized and "must run --resync" in blob:
+                        # The cause is passing, but the next attempt still needs listings.
+                        f.resync_reason = f.resync_reason or "recover"
                     if kind == "rate":
                         f.backoff = min(max(f.backoff * 2, 120.0), 1800.0)
                         detail = self._shared_client_note(f.remote) or detail
@@ -2246,7 +2289,7 @@ class Daemon:
             state = "waiting"
         elif f.error and f.retry_at > now:
             state = "error"
-        elif not f.initialized:
+        elif not f.initialized or f.resync_reason:
             state = "pending"
         elif f.dirty_since and not f.followup_only:
             state = "changes"
@@ -2273,7 +2316,9 @@ class Daemon:
             "errorKind": f.error_kind,
             "attention": f.attention,
             "attentionCode": f.attention_code,
-            "resync": bool(f.resync_reason) or not f.initialized,
+            "resync": f.run_resync
+            if f.job_id
+            else bool(f.resync_reason) or not f.initialized,
             "progress": f.progress,
             "conflicts": f.conflicts[:5],
             "conflictCount": len(f.conflicts),
@@ -2302,7 +2347,11 @@ class Daemon:
             folders.sort(key=lambda x: x["path"].lower())
             folder_count += len(folders)
             syncing += sum(1 for x in folders if x["state"] == "syncing")
-            attention += sum(1 for x in folders if x["state"] in ("attention", "error"))
+            attention += sum(
+                1
+                for x in folders
+                if x["attention"] or x["state"] == "error" or x["conflictCount"]
+            )
             attention += 1 if d.mount_state in ("error", "foreign") else 0
             uploads += d.uploads
             mounted += 1 if d.mount_state == "mounted" else 0
@@ -3080,16 +3129,25 @@ class Daemon:
         f = self._folder(args)
         action = str(args.get("action", ""))
         if action == "force":
+            if (
+                f.resync_reason or not f.initialized
+            ) and f.attention_code != "missing_local":
+                raise UserError(
+                    "The sync state needs a Resync first; nothing will be deleted"
+                )
             f.force_next = True
         elif action == "resync":
             f.resync_reason = "manual"
+            f.force_next = False
+            f.recovery_attempted = False
         elif action != "dismiss":
             raise UserError("Unknown action")
         if f.attention_code == "missing_local" and action in ("resync", "force"):
             await self.fs(lambda p: os.makedirs(p, exist_ok=True), f.local, timeout=10)
             f.resync_reason = "manual"
             f.force_next = False
-        f.attention = f.attention_code = f.error = ""
+        f.attention = f.attention_code = f.error = f.error_kind = ""
+        f.waiting_network = False
         f.retry_at, f.backoff, f.next_due = 0, 0, 0
         self._persist_folder(f)
         self.wake()
