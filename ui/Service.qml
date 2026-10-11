@@ -39,6 +39,8 @@ Item {
   property var auth: ({ busy: false, waiting: false, url: "", error: "", success: "", remote: "" })
   property var statePaths: ({})
   property int backupFiles: 0
+  // Never-synced patterns in filters.txt, and how many rules it has besides
+  property var filters: ({ excludes: [], otherRules: 0 })
   property string daemonVersion: ""
 
   readonly property bool ready: connected && engine.state === "running"
@@ -178,6 +180,7 @@ Item {
     if (s.auth && _changed(s.auth, auth)) auth = s.auth
     if (s.paths && _changed(s.paths, statePaths)) statePaths = s.paths
     backupFiles = Number(s.backupFiles || 0)
+    if (s.filters && _changed(s.filters, filters)) filters = s.filters
     daemonVersion = String(s.version || "")
     stateUpdated()
   }
@@ -235,6 +238,10 @@ Item {
   function pauseFolder(id, paused) { act("pause_folder", { id: id, paused: paused }, "") }
   // An empty label shows the folder's own name again
   function setFolder(id, label) { act("set_folder", { id: id, label: label }, "") }
+  // Never-synced patterns: the global list without an id, else that folder's own (empty: global)
+  function setExcludes(id, patterns) {
+    act("set_excludes", id ? { id: id, patterns: patterns } : { patterns: patterns }, "Saving…")
+  }
   function syncNow(id) { act("sync_now", id ? { id: id } : {}, "") }
   function resolveFolder(id, action) { act("resolve", { id: id, action: action }, "") }
   function clearConflicts(id) { request("clear_conflicts", { id: id }) }

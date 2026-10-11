@@ -11,6 +11,7 @@ Everything runs in throwaway directories with its own rclone config, so your rea
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -316,6 +317,123 @@ def test_folder_alias(sb: Sandbox) -> None:
     assert spec["label"] is None, "a cleared alias isn't saved"
     reply = sb.request("set_folder", id="nope", label="x")
     assert not reply["ok"], "an unknown folder is refused"
+
+
+def test_excludes(sb: Sandbox) -> None:
+    fid = sb._fid
+    local = Path(sb.folder(fid)["local"])
+    cloud = sb.remote_b / "docs"
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+    filters_txt = sb.tmp / "cfg" / "guacamole" / "filters.txt"
+    cfg_file = sb.tmp / "cfg" / "guacamole" / "config.json"
+    original = filters_txt.read_text()
+    glob = sb.state()["filters"]["excludes"]
+    assert "*.tmp" in glob and ".DS_Store" in glob, glob
+
+    def settle() -> None:
+        wait(lambda: sb.folder(fid)["state"] == "synced", 40, "settled")
+
+    def resynced(mark: int) -> bool:
+        return re.search(
+            rf"sync {fid} \(.*\) started \[resync\]", log.read_text()[mark:]
+        )
+
+    def stays_quiet(mark: int) -> None:
+        time.sleep(7)  # past the 4s debounce
+        assert not sb.folder(fid)["localChanges"], "a never-synced file woke the syncer"
+        assert f"sync {fid} (" not in log.read_text()[mark:], "a sync started"
+
+    try:
+        settle()
+        # Global list: saved into filters.txt, comments kept, one safe resync
+        mark = len(log.read_text())
+        data = sb.ok("set_excludes", patterns=glob + ["*.log"])
+        assert data["excludes"][-1] == "*.log"
+        assert "# rclone filter syntax" in filters_txt.read_text()
+        assert filters_txt.read_text().rstrip().endswith("- *.log")
+        wait(lambda: resynced(mark), 20, "resync after a global change")
+        settle()
+
+        # Excluded both ways, and never wakes the syncer
+        mark = len(log.read_text())
+        (local / "debug.log").write_text("local only\n")
+        (local / "sub" / "deep.log").write_text("local only\n")
+        stays_quiet(mark)
+        (cloud / "server.log").write_text("cloud only\n")
+        time.sleep(1.1)
+        sb.ok("sync_now", id=fid)
+        time.sleep(1)
+        settle()
+        assert (
+            not (cloud / "debug.log").exists() and not (local / "server.log").exists()
+        )
+
+        # A folder's own list replaces the global one: *.log syncs again, *.bak doesn't
+        mark = len(log.read_text())
+        assert sb.request("set_excludes", id=fid, patterns=["[oops"])["ok"] is False
+        sb.ok("set_excludes", id=fid, patterns=["*.bak", "- *.bak", " *.old "])
+        assert sb.folder(fid)["excludes"] == ["*.bak", "*.old"]
+        spec = json.loads(cfg_file.read_text())["remotes"]["CloudB"]["folders"][0]
+        assert spec["excludes"] == ["*.bak", "*.old"], spec
+        wait(lambda: resynced(mark), 20, "resync after the folder's own list")
+        wait(lambda: (cloud / "debug.log").exists(), 20, "no longer excluded: uploaded")
+        wait(
+            lambda: (local / "server.log").exists(),
+            20,
+            "no longer excluded: downloaded",
+        )
+        settle()
+        mark = len(log.read_text())
+        (local / "draft.bak").write_text("local only\n")
+        stays_quiet(mark)
+
+        # Empty falls back to global; the resync deletes nothing
+        mark = len(log.read_text())
+        r = guac_cli(sb, "exclude", fid, "--global")
+        assert r.returncode == 0 and "global" in r.stdout, r.stdout + r.stderr
+        assert sb.folder(fid)["excludes"] == []
+        spec = json.loads(cfg_file.read_text())["remotes"]["CloudB"]["folders"][0]
+        assert spec["excludes"] is None, spec
+        wait(lambda: resynced(mark), 20, "resync back on the global list")
+        settle()
+        assert (cloud / "debug.log").exists() and (local / "draft.bak").exists()
+        r = guac_cli(sb, "exclude", fid, "--add", "*.psd")
+        assert r.returncode == 0, r.stderr
+        own = sb.folder(fid)["excludes"]
+        assert own[-1] == "*.psd" and "*.log" in own, (
+            "a first change starts from global"
+        )
+        r = guac_cli(sb, "exclude", fid)
+        assert r.returncode == 0 and "own list" in r.stdout and "*.psd" in r.stdout
+        sb.ok("set_excludes", id=fid, patterns=[])
+        settle()
+
+        # filters.txt edited by hand still works
+        mark = len(log.read_text())
+        filters_txt.write_text(filters_txt.read_text() + "- *.raw\n")
+        wait(lambda: "*.raw" in sb.state()["filters"]["excludes"], 20, "hand edit read")
+        wait(lambda: resynced(mark), 20, "resync after a hand edit")
+        settle()
+    finally:
+        sb.request("set_excludes", id=fid, patterns=[])
+        filters_txt.write_text(original)
+        wait(lambda: "*.raw" not in sb.state()["filters"]["excludes"], 20, "restored")
+        for p in (
+            local / "debug.log",
+            local / "sub" / "deep.log",
+            local / "server.log",
+            local / "draft.bak",
+            cloud / "debug.log",
+            cloud / "server.log",
+            cloud / "draft.bak",
+            cloud / "sub" / "deep.log",
+        ):
+            p.unlink(missing_ok=True)
+        time.sleep(1.1)
+        sb.request("sync_now", id=fid)
+        settle()
+        time.sleep(11)  # the follow-up sync after a sync's own writes, then quiet
+        settle()
 
 
 def test_paused_roundtrip(sb: Sandbox) -> None:
@@ -733,6 +851,7 @@ SCENARIOS = [
     test_busy_unmount,
     test_keep_local_sync,
     test_folder_alias,
+    test_excludes,
     test_paused_roundtrip,
     test_pause_while_syncing,
     test_conflict,
@@ -764,7 +883,7 @@ def main() -> int:
         sb.start()
         for scenario in SCENARIOS:
             name = scenario.__name__
-            if args.k and args.k not in name:
+            if args.k and not any(k in name for k in args.k.split(",")):
                 continue
             t0 = time.monotonic()
             try:

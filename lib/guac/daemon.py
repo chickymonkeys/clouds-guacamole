@@ -14,7 +14,6 @@ import concurrent.futures
 import errno
 import fcntl
 import fnmatch
-import hashlib
 import json
 import logging
 import logging.handlers
@@ -33,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import __version__, config, paths, providers, recent, util
+from . import __version__, config, filters, paths, providers, recent, util
 from .inotify import (
     IN_CLOSE_WRITE,
     IN_CREATE,
@@ -148,6 +147,11 @@ class Folder:
     local: str
     paused: bool = False
     label: str = ""
+    # Own never-synced patterns, used instead of filters.txt; empty: the global list
+    excludes: list[str] = field(default_factory=list)
+    # Digest of the filter rules the last successful sync ran with, and the running one's
+    filters_md5: str = ""
+    run_filters_md5: str = ""
     job_id: int = 0
     job_started: float = 0.0
     progress: dict[str, Any] = field(default_factory=dict)
@@ -254,7 +258,9 @@ def _list_dirs(path: str, limit: int) -> list[str]:
     return sorted(names, key=str.lower)
 
 
-def _collect_dirs(top: str, limit: int) -> list[str]:
+def _collect_dirs(
+    top: str, limit: int, skip: Callable[[str], bool] | None = None
+) -> list[str]:
     found = []
     stack = [top]
     while stack and len(found) < limit:
@@ -264,15 +270,33 @@ def _collect_dirs(top: str, limit: int) -> list[str]:
             with os.scandir(d) as it:
                 for entry in it:
                     try:
-                        if entry.is_dir(
-                            follow_symlinks=False
-                        ) and not entry.name.startswith(".Trash-"):
+                        if (
+                            entry.is_dir(follow_symlinks=False)
+                            and not entry.name.startswith(".Trash-")
+                            and (skip is None or not skip(entry.path))
+                        ):
                             stack.append(entry.path)
                     except OSError:
                         continue
         except OSError:
             continue
     return found
+
+
+def _relative(path: str, top: str) -> str:
+    if path.startswith(top + "/"):
+        return path[len(top) + 1 :]
+    return os.path.relpath(path, top)
+
+
+def _write_filters(path: Path, text: str) -> None:
+    """Write a filter file in place of the old one, only when its rules changed."""
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    config.write_text_atomic(path, text)
 
 
 def _ensure_link(fid: str, target: str) -> str:
@@ -494,8 +518,12 @@ class Daemon:
         self._notified: dict[str, float] = {}
         self._backups_pruned = 0.0
         self.backup_files = 0  # local files syncs replaced or deleted, kept in backups/
-        self._filters_md5 = ""
         self._filters_sig: Any = None
+        self._global_filters = ""  # filters.txt as last read
+        self._global_md5 = ""
+        # filters.txt's digest saved by versions that tracked one for every folder
+        self._legacy_filters_md5 = ""
+        self._matchers: dict[str, tuple[str, filters.Matcher]] = {}
         self._rc_batch = True  # until an rclone without job/batch says otherwise
         self._tasks: list[asyncio.Task] = []
         # Bound to the event loop on first use
@@ -677,10 +705,9 @@ class Daemon:
         config.ensure_filters()
         self._spawn(self._ensure_local_root())
         self._filters_sig = self._filters_signature()
-        self._filters_md5 = self._filters_hash()
-        if self.st.get("filters_md5") and self.st["filters_md5"] != self._filters_md5:
-            self.st["filters_changed"] = True
-        self.st["filters_md5"] = self._filters_md5
+        self._read_global_filters()
+        self._legacy_filters_md5 = str(self.st.get("filters_md5") or "")
+        self.st["filters_md5"] = self._global_md5
         self._init_inotify()
         self._rebuild_folders()
 
@@ -1263,6 +1290,7 @@ class Daemon:
                         local=str(paths.expand(spec["local"])),
                         paused=spec.get("paused", False),
                         label=spec.get("label") or "",
+                        excludes=list(spec.get("excludes") or []),
                     )
                     f.initialized = bool(saved.get("initialized"))
                     f.last_sync = float(saved.get("last_sync", 0))
@@ -1271,8 +1299,13 @@ class Daemon:
                     f.attention = str(saved.get("attention", ""))
                     f.attention_code = str(saved.get("attention_code", ""))
                     f.error = str(saved.get("error", ""))
-                    if self.st.get("filters_changed") and f.initialized:
-                        f.resync_reason = "filters"
+                    # Saved by older versions: one digest of filters.txt for every folder
+                    f.filters_md5 = str(
+                        saved.get("filters_md5") or self._legacy_filters_md5
+                    )
+                    if self.st.get("filters_changed"):
+                        f.filters_md5 = "changed"
+                    self._check_filters(f)
                     # Catch up shortly after start, staggered so they don't all list at once
                     f.next_due = now + 5 + len(self.folders) * 2
                     self.folders[fid] = f
@@ -1280,10 +1313,15 @@ class Daemon:
                 else:
                     f.paused = spec.get("paused", False)
                     f.label = spec.get("label") or ""
+                    excludes = list(spec.get("excludes") or [])
+                    if excludes != f.excludes:
+                        f.excludes = excludes
+                        self._filters_changed(f)
         self.st.pop("filters_changed", None)
         for fid in list(self.folders):
             if fid not in seen:
                 self._unwatch_folder(fid)
+                self._matchers.pop(fid, None)
                 del self.folders[fid]
                 self.st["folders"].pop(fid, None)
 
@@ -1298,6 +1336,7 @@ class Daemon:
             "attention": f.attention,
             "attention_code": f.attention_code,
             "error": f.error,
+            "filters_md5": f.filters_md5,
         }
         config.save_state(self.st)
 
@@ -1311,6 +1350,7 @@ class Daemon:
                 "attention": f.attention,
                 "attention_code": f.attention_code,
                 "error": f.error,
+                "filters_md5": f.filters_md5,
             }
         config.save_state(self.st)
 
@@ -1422,11 +1462,15 @@ class Daemon:
             await self.fs(lambda p: os.makedirs(p, exist_ok=True), f.local, timeout=10)
         rtype = self.remotes.get(f.remote, {}).get("type", "")
         link = await self.fs(_ensure_link, f.id, f.local, timeout=5)
+        filters_path, filters_text = self._filters_of(f)
+        if f.excludes:
+            await self.fs(_write_filters, filters_path, filters_text, timeout=5)
+        f.run_filters_md5 = filters.digest(filters_text)
         params: dict[str, Any] = {
             "path1": providers.bisync_remote_spec(f.remote, rtype, f.path),
             "path2": link,
             "workdir": str(paths.ensure_private_dir(paths.bisync_dir(f.id))),
-            "filtersFile": str(paths.filters_file()),
+            "filtersFile": str(filters_path),
             "createEmptySrcDirs": True,
             "compare": "size,modtime",
             # Conflicts never lose data: the newer file wins, the other is kept as name.conflictN
@@ -1557,6 +1601,9 @@ class Daemon:
         if js.get("success"):
             first_sync = not f.initialized
             f.initialized, f.resync_reason = True, ""
+            # Rules changed while this sync ran: one more resync, with the new ones
+            f.filters_md5 = f.run_filters_md5
+            self._check_filters(f)
             f.last_sync, f.last_changes = now, changes
             f.error = f.error_kind = f.attention = f.attention_code = ""
             f.backoff = 0
@@ -1702,7 +1749,14 @@ class Daemon:
                 f.watch_error = "File watching is unavailable; syncing on a timer only"
             return
         try:
-            dirs = await self.fs(_collect_dirs, top, MAX_WATCH_DIRS, timeout=120)
+            matcher, local = self._matcher(f), f.local
+            dirs = await self.fs(
+                _collect_dirs,
+                top,
+                MAX_WATCH_DIRS,
+                lambda d: matcher.ignored(_relative(d, local), True),
+                timeout=120,
+            )
         except (asyncio.TimeoutError, OSError):
             return
         wds = self._folder_wds.setdefault(fid, set())
@@ -1759,6 +1813,12 @@ class Daemon:
             if f is None:
                 continue
             if ev.name and _IGNORED_EVENT_RE.match(ev.name):
+                continue
+            # Never-synced files and folders never wake the syncer either
+            if ev.name and self._matcher(f).ignored(
+                _relative(os.path.join(dirpath, ev.name), f.local),
+                bool(ev.mask & IN_ISDIR),
+            ):
                 continue
             if ev.mask & IN_ISDIR and ev.mask & (IN_CREATE | IN_MOVED_TO):
                 self._spawn(self._add_watches(fid, os.path.join(dirpath, ev.name)))
@@ -1999,18 +2059,9 @@ class Daemon:
                     await self._refresh_quotas(now)
                 # Read and hashed again only when the file was touched
                 sig = self._filters_signature()
-                md5 = self._filters_md5
                 if sig != self._filters_sig:
                     self._filters_sig = sig
-                    md5 = self._filters_hash()
-                if md5 != self._filters_md5:
-                    log.info("filters changed: next syncs are resyncs")
-                    self._filters_md5 = self.st["filters_md5"] = md5
-                    for f in self.folders.values():
-                        if f.initialized:
-                            f.resync_reason = "filters"
-                    config.save_state(self.st)
-                    self.wake()
+                    self._global_filters_changed()
                 if now - self._backups_pruned > 6 * 3600:
                     self._backups_pruned = now
                     await self.fs(
@@ -2035,11 +2086,64 @@ class Daemon:
         except OSError:
             return None
 
-    def _filters_hash(self) -> str:
+    def _read_global_filters(self) -> None:
         try:
-            return hashlib.md5(paths.filters_file().read_bytes()).hexdigest()
+            self._global_filters = paths.filters_file().read_text(
+                encoding="utf-8", errors="replace"
+            )
         except OSError:
-            return ""
+            self._global_filters = ""
+        self._global_md5 = filters.digest(self._global_filters)
+
+    def _global_filters_changed(self) -> None:
+        """filters.txt was edited, here or by hand: folders without their own list resync."""
+        old = self._global_md5
+        self._read_global_filters()
+        if self._global_md5 == old:
+            return
+        log.info("filters changed: next syncs of folders using them are resyncs")
+        self.st["filters_md5"] = self._global_md5
+        for f in self.folders.values():
+            if not f.excludes:
+                self._filters_changed(f)
+        self._persist_all_folders()
+
+    def _filters_of(self, f: Folder) -> tuple[Path, str]:
+        """The filter file f syncs with and the rules in it: its own list, else filters.txt."""
+        if f.excludes:
+            return paths.folder_filters_file(f.id), filters.override_text(f.excludes)
+        return paths.filters_file(), self._global_filters
+
+    def _matcher(self, f: Folder) -> filters.Matcher:
+        # Asked for every file event: rebuilt only when the folder's rules change
+        key = "\n".join(f.excludes) if f.excludes else self._global_md5
+        cached = self._matchers.get(f.id)
+        if cached is None or cached[0] != key:
+            cached = (key, filters.Matcher(self._filters_of(f)[1]))
+            self._matchers[f.id] = cached
+        return cached[1]
+
+    def _check_filters(self, f: Folder) -> None:
+        """A folder whose rules differ from its last sync's resyncs once: newer wins, nothing
+        is deleted, backups are kept. Files newly excluded stay where they are on both sides;
+        files no longer excluded are brought over."""
+        md5 = filters.digest(self._filters_of(f)[1])
+        if not f.initialized or not f.filters_md5:
+            f.filters_md5 = f.filters_md5 or md5
+            return
+        if md5 != f.filters_md5:
+            f.resync_reason = f.resync_reason or "filters"
+        elif f.resync_reason == "filters":
+            # Changed and changed back before any sync used it
+            f.resync_reason = ""
+
+    def _filters_changed(self, f: Folder) -> None:
+        self._check_filters(f)
+        # Folders newly synced (or no longer) are watched (or not) from now on
+        if f.watching or f.id in self._folder_wds:
+            self._unwatch_folder(f.id)
+            self._watch_folder(f)
+        self.mark()
 
     async def _refresh_quotas(self, now: float, only: str | None = None) -> None:
         for name in list(self.remotes):
@@ -2175,6 +2279,8 @@ class Daemon:
             "conflictCount": len(f.conflicts),
             "watching": f.watching,
             "watchError": f.watch_error,
+            # Its own never-synced patterns; empty: the global list
+            "excludes": f.excludes,
         }
 
     def build_state(self) -> dict[str, Any]:
@@ -2266,6 +2372,11 @@ class Daemon:
                 "backups": str(paths.backup_root()),
             },
             "backupFiles": self.backup_files,
+            # The never-synced patterns in filters.txt, and how many other rules it has
+            "filters": {
+                "excludes": filters.excludes_of(self._global_filters),
+                "otherRules": filters.other_rules(self._global_filters),
+            },
         }
 
     def _state_line(self) -> str:
@@ -2898,6 +3009,45 @@ class Daemon:
         self.save_cfg()
         self.mark()
         return {"message": "Saved"}
+
+    async def cmd_set_excludes(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Never-synced patterns: filters.txt's without an id, else that folder's own list
+        (an empty one goes back to filters.txt). Either way the folders whose rules change
+        resync once, safely."""
+        try:
+            patterns = filters.clean_patterns(args.get("patterns") or [])
+        except ValueError as e:
+            raise UserError(str(e)) from None
+        if not args.get("id"):
+            text = filters.with_excludes(self._global_filters, patterns)
+            if text != self._global_filters:
+                await self.fs(_write_filters, paths.filters_file(), text, timeout=5)
+            self._filters_sig = self._filters_signature()
+            self._global_filters_changed()
+            self.wake()
+            return {
+                "message": "Saved; folders using these patterns resync safely",
+                "excludes": filters.excludes_of(self._global_filters),
+            }
+        f = self._folder(args)
+        name = f.label or self._folder_default_name(f)
+        if patterns != f.excludes:
+            for spec in self.remote_cfg(f.remote)["folders"]:
+                if spec["id"] == f.id:
+                    spec["excludes"] = patterns or None
+            self.save_cfg()
+            f.excludes = patterns
+            self._filters_changed(f)
+            self._persist_folder(f)
+            self.wake()
+        return {
+            "message": (
+                f"{name} uses its own never-synced patterns"
+                if patterns
+                else f"{name} uses the global never-synced patterns"
+            ),
+            "excludes": f.excludes,
+        }
 
     async def cmd_sync_now(self, args: dict[str, Any]) -> dict[str, Any]:
         targets = (

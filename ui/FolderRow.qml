@@ -37,7 +37,14 @@ CursorSurface {
     if (p.totalTransfers > 0) return Math.min(1, p.transfers / p.totalTransfers)
     return -1
   }
-  readonly property bool hasEdits: editing && labelInput.text.trim() !== String(folder.label || "")
+  // Its own never-synced patterns, used instead of the global list; none: the global list
+  readonly property var ownExcludes: folder.excludes || []
+  readonly property var globalExcludes: service ? (service.filters.excludes || []) : []
+  property bool draftOwn: false
+  readonly property var draftExcludes: draftOwn ? excludeEditor.patterns : []
+  readonly property bool labelEdited: labelInput.text.trim() !== String(folder.label || "")
+  readonly property bool excludesEdited: JSON.stringify(draftExcludes) !== JSON.stringify(ownExcludes)
+  readonly property bool hasEdits: editing && (labelEdited || excludesEdited)
   readonly property bool hasDetails: syncing || needsAttention || confirmingRemove || editing
                                      || (state_ === "error" && (folder.error || "") !== "")
                                      || (folder.conflictCount || 0) > 0
@@ -45,10 +52,14 @@ CursorSurface {
 
   function resetEditor() {
     labelInput.text = String(folder.label || folder.defaultName || "")
+    draftOwn = ownExcludes.length > 0
+    excludeEditor.patterns = ownExcludes.slice()
   }
 
   function applyEdits() {
-    root.service.setFolder(folder.id, labelInput.text.trim())
+    if (labelEdited) root.service.setFolder(folder.id, labelInput.text.trim())
+    // An emptied list goes back to the global one
+    if (excludesEdited) root.service.setExcludes(folder.id, draftExcludes)
     root.editing = false
   }
 
@@ -121,6 +132,8 @@ CursorSurface {
         PanelToolTip {
           visible: nameHover.hovered
           text: Model.tildify(root.folder.local, root.home) + "  ⇄  " + root.folder.remote + ":" + (root.folder.path || "/")
+                + (root.ownExcludes.length > 0 ? "\nNever syncs its own " + root.ownExcludes.length
+                   + (root.ownExcludes.length === 1 ? " pattern" : " patterns") : "")
           fontFamily: root.fontFamily
         }
       }
@@ -168,7 +181,7 @@ CursorSurface {
 
         PanelActionButton {
           iconText: "󰏫"
-          tooltipText: root.editing ? "Close" : "Rename"
+          tooltipText: root.editing ? "Close" : "Rename, never-synced files"
           fontSize: Style.font.body
           foreground: root.editing ? Color.accent : root.foreground
           hoverColor: Color.accent
@@ -201,7 +214,8 @@ CursorSurface {
       Layout.bottomMargin: Style.space(4)
       spacing: Style.space(6)
 
-      // Rename: a display name for the widget and the CLI, the folder's own name when empty
+      // Rename: a display name for the widget and the CLI, the folder's own name when empty.
+      // Never sync: the global patterns, or the folder's own list instead
       BorderSurface {
         visible: root.editing
         Layout.fillWidth: true
@@ -230,6 +244,66 @@ CursorSurface {
             Layout.fillWidth: true
             placeholderText: root.folder.defaultName || ""
             onAccepted: if (root.hasEdits) root.applyEdits()
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: Style.space(4)
+            spacing: Style.space(8)
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 0
+
+              Text {
+                text: "Own never-synced files"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                color: Qt.darker(root.foreground, 1.4)
+              }
+
+              Text {
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: root.draftOwn
+                      ? "Replaces the global list for this folder (later global changes don't apply). Emptying it goes back to the global list."
+                      : "Uses the global list (" + root.globalExcludes.length + " patterns, Settings → Filters)."
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption - Style.space(2)
+                color: root.dim
+                wrapMode: Text.WordWrap
+              }
+            }
+
+            ToggleSwitch {
+              checked: root.draftOwn
+              foreground: root.foreground
+              onToggled: {
+                // Starts from the global list, the one the folder was using
+                if (!root.draftOwn && excludeEditor.patterns.length === 0)
+                  excludeEditor.patterns = root.globalExcludes.slice()
+                root.draftOwn = !root.draftOwn
+              }
+            }
+          }
+
+          ExcludeEditor {
+            id: excludeEditor
+            visible: root.draftOwn
+            Layout.fillWidth: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Text {
+            visible: root.excludesEdited
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: "Saving makes the next sync a safe resync: nothing is deleted, the newer copy wins."
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption - Style.space(2)
+            color: Color.accent
+            wrapMode: Text.WordWrap
           }
 
           RowLayout {

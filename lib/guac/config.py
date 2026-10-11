@@ -8,7 +8,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import filters, paths
 
 log = logging.getLogger("guac.config")
 
@@ -95,6 +95,32 @@ def write_json_atomic(path: Path, data: Any) -> None:
     os.replace(tmp, path)
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    # Through a symlink (filters.txt kept with dotfiles) the file it points to is replaced
+    path = Path(os.path.realpath(path))
+    paths.ensure_private_dir(path.parent)
+    tmp = path.with_name(path.name + ".tmp")
+    with _open_private(tmp) as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _normalize_excludes(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    out = []
+    for v in value:
+        try:
+            p = filters.clean_pattern(v)
+        except ValueError:
+            continue
+        if p not in out:
+            out.append(p)
+    return out[: filters.MAX_PATTERNS] or None
+
+
 def _read_json(path: Path) -> Any | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -123,6 +149,8 @@ def normalize_remote(entry: Any) -> dict[str, Any]:
                 "label": alias.strip()
                 if isinstance(alias, str) and alias.strip()
                 else None,
+                # Own never-synced patterns, used instead of filters.txt; None: filters.txt
+                "excludes": _normalize_excludes(f.get("excludes")),
             }
         )
     label = entry.get("label")

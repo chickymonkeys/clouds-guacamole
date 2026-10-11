@@ -16,6 +16,9 @@ Item {
 
   readonly property color dim: Qt.darker(foreground, 1.6)
   readonly property var s: service ? service.appSettings : ({})
+  property bool editingFilters: false
+  readonly property var globalExcludes: service ? (service.filters.excludes || []) : []
+  readonly property bool filtersEdited: JSON.stringify(filterEditor.patterns) !== JSON.stringify(globalExcludes)
 
   implicitHeight: col.implicitHeight
 
@@ -25,6 +28,7 @@ Item {
     cacheSizeField.value = Number(s.cache_max_size_gb || 20)
     intervalField.value = Number(s.sync_interval_min || 5)
     backupField.value = Number(s.backup_days || 30)
+    editingFilters = false
   }
 
   component Label: Text {
@@ -321,9 +325,12 @@ Item {
           EngineAction {
             text: "Filters"
             iconText: "󰈲"
-            tooltipText: "Files that are never synced, in your editor. Changing them makes the next syncs safe resyncs."
-            enabled: (root.service.statePaths.filters || "") !== ""
-            onClicked: root.service.openPath(root.service.statePaths.filters)
+            tooltipText: "Files that are never synced, by any folder without its own list. Changing them makes the next syncs safe resyncs."
+            enabled: root.service.connected
+            onClicked: {
+              if (!root.editingFilters) filterEditor.patterns = root.globalExcludes.slice()
+              root.editingFilters = !root.editingFilters
+            }
           }
 
           EngineAction {
@@ -337,6 +344,75 @@ Item {
               if (root.service.backupFiles > 0) root.service.openPath(root.service.statePaths.backups)
               else root.service.notice("No local file has been replaced yet. When a sync overwrites or deletes one, the old copy is kept here for "
                                        + (root.s.backup_days || 30) + " days.")
+            }
+          }
+        }
+
+        // Filters: the global never-synced patterns, kept in filters.txt
+        ColumnLayout {
+          visible: root.editingFilters
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(4)
+          spacing: Style.space(6)
+
+          Label { text: "Never synced" }
+          Hint {
+            text: "Files and folders matching these never sync, either way, in every folder without its own list (a folder's 󰏫 editor). "
+                  + "* stays in one folder, ** crosses folders, a leading / starts at the folder's top, a trailing / means folders."
+          }
+
+          ExcludeEditor {
+            id: filterEditor
+            Layout.fillWidth: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Hint {
+            visible: (root.service.filters.otherRules || 0) > 0
+            text: "filters.txt also has " + root.service.filters.otherRules + " other rule(s), kept as they are; edit the file for those."
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Button {
+              text: "Save"
+              iconText: "󰄬"
+              tooltipText: "The next sync of each folder using these is a safe resync: nothing is deleted, the newer copy wins"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: true
+              enabled: root.filtersEdited
+              opacity: enabled ? 1.0 : 0.45
+              onClicked: {
+                root.service.setExcludes("", filterEditor.patterns)
+                root.editingFilters = false
+              }
+            }
+
+            Button {
+              text: "Edit file"
+              tooltipText: "Open filters.txt in your editor (rclone filter syntax)"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: false
+              enabled: (root.service.statePaths.filters || "") !== ""
+              onClicked: root.service.openPath(root.service.statePaths.filters)
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+              text: "Cancel"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: false
+              onClicked: root.editingFilters = false
             }
           }
         }

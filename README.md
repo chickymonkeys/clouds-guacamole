@@ -36,7 +36,8 @@ On a drive card, open **Local folders** and choose **Keep a folder on this devic
 - **Safety stop.** If most files disappear on one side (a wiped disk, an unmounted drive, a sync gone wrong), nothing is propagated. The folder asks you to choose between **Resync**, which merges both sides again and never deletes, and **Sync anyway**.
 - **Replaced local files are kept** for 30 days under `~/.local/state/guacamole/backups/` (Settings → Engine → Backups).
 - **Pause a folder to work offline**, or while you change many files and don't want each save uploaded. Nothing syncs and no rclone runs for it until you resume. A sync already under way finishes first, since stopping bisync part way would force a resync. The folder still notices your edits and says *paused, changes waiting*. Resuming runs one ordinary sync at once that brings both sides together, with the same conflict copies and safety stop as any other sync.
-- Editor temp files, `.DS_Store`, `Thumbs.db`, Obsidian's per-device `workspace.json` and similar files are never synced. The list is in `~/.config/guacamole/filters.txt` (Settings → Engine → Filters).
+- Editor temp files, `.DS_Store`, `Thumbs.db`, Obsidian's per-device `workspace.json` and similar files are never synced, either way, and changing them never starts a sync. Edit the list in Settings → Engine → Filters: add or remove patterns (`*.log`, `build/`, `/Exports/**`), or open `~/.config/guacamole/filters.txt` itself, which stays the source and keeps any rule the widget doesn't manage.
+- **A folder can have its own never-synced list** instead of the global one: in its 󰏫 editor, turn on *Own never-synced files* (it starts from a copy of the global list). The folder's list **replaces** the global one, it is not added to it: patterns you later add to the global list don't reach that folder, and neither do any other rules in `filters.txt` (include rules, for instance). Emptying it, or turning it off, goes back to the global list. Whenever the rules a folder syncs with change, its next sync is a safe resync: nothing is deleted, the newer copy wins, and replaced local files still go to the backups. Files newly excluded stay where they are; files no longer excluded are brought over.
 
 <table>
   <tr>
@@ -130,7 +131,7 @@ Remotes already in your rclone config appear as drives right away, not streamed 
 - **Settings.** Stream and sync locations, cache size, sync interval, backup retention and notifications. The **Engine** row has:
   - *Restart* (rclone);
   - *Log*, an in-panel viewer for Guacamole's and rclone's logs, with a problems-only filter, copy and open;
-  - *Filters*, which opens `filters.txt` in your editor;
+  - *Filters*, the never-synced patterns of every folder without its own list, editable in place, with *Edit file* to open `filters.txt` in your editor;
   - *Backups*, the local files syncs replaced or deleted (it says so when there are none yet).
 
 <table>
@@ -166,6 +167,7 @@ guac unkeep Drive:Documents/Notes [--delete-local]
 guac sync [FOLDER]                      # sync now
 guac pause|resume FOLDER...             # pause to work offline; resume catches up at once
 guac alias FOLDER "Team notes"          # display name; empty: the folder's own name
+guac exclude [FOLDER] [--add P] [--remove P] [--global]  # never-synced patterns: global, or a folder's own
 guac resolve FOLDER resync|force|dismiss
 guac browse Drive:Documents             # list folders
 guac size Drive:Documents/Notes
@@ -191,7 +193,7 @@ guac service install|uninstall
 | --------------------------------- | -------------------------------------------------------------------------- |
 | `~/Cloud/Stream/`, `~/Cloud/Sync/` | Streamed drives and folders kept on this device (both configurable)       |
 | `~/.config/guacamole/config.json` | Settings, and per drive: streaming, mount path, local folders              |
-| `~/.config/guacamole/filters.txt` | Never-synced patterns (editing it makes the next syncs safe resyncs)       |
+| `~/.config/guacamole/filters.txt` | Global never-synced patterns (editing it makes the next syncs safe resyncs) |
 | `~/.local/state/guacamole/`       | `state.json`, `daemon.log`, `rclone.log`, bisync work files, `backups/`    |
 | `$XDG_RUNTIME_DIR/guacamole/`     | Private sockets: `daemon.sock` (widget, CLI), `rclone.sock` (rclone rc), `sync-<id>.sock` while a folder syncs |
 | `~/.cache/rclone/vfs*`            | rclone's stream cache                                                      |
