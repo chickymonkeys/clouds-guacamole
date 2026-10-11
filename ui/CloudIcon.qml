@@ -12,6 +12,8 @@ Item {
   property bool active: false
   property bool busy: false
   property bool attention: false
+  // Off while nobody can see it (a closed panel), so the spinner doesn't keep ticking
+  property bool animate: true
 
   width: iconSize * 1.2
   height: iconSize
@@ -37,7 +39,7 @@ Item {
     font.pixelSize: root.iconSize * 0.8
     transformOrigin: Item.Center
     RotationAnimation on rotation {
-      running: root.busy
+      running: root.busy && root.animate
       from: 0
       to: 360
       duration: 1100

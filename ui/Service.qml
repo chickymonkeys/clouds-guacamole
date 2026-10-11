@@ -157,19 +157,26 @@ Item {
     }
   }
 
+  // Assigning a var property re-evaluates every binding on it, even with equal contents
+  function _changed(a, b) {
+    return JSON.stringify(a) !== JSON.stringify(b)
+  }
+
   function _applyState(s) {
-    engine = s.engine || engine
+    // Mostly unchanged between pushes, and read by the bar and the settings: replaced only when
+    // they differ. Drives and recent files always are, so their "5m ago" texts stay fresh.
+    if (s.engine && _changed(s.engine, engine)) engine = s.engine
     online = s.online !== false
     mountRoot = String(s.mountRoot || mountRoot)
     localRoot = String(s.localRoot || localRoot)
     cloudRoot = String(s.cloudRoot || mountRoot)
-    appSettings = s.settings || appSettings
+    if (s.settings && _changed(s.settings, appSettings)) appSettings = s.settings
     drives = s.drives || []
-    summary = s.summary || summary
-    transfers = s.transfers || transfers
+    if (s.summary && _changed(s.summary, summary)) summary = s.summary
+    if (s.transfers && _changed(s.transfers, transfers)) transfers = s.transfers
     recent = s.recent || []
-    auth = s.auth || auth
-    statePaths = s.paths || statePaths
+    if (s.auth && _changed(s.auth, auth)) auth = s.auth
+    if (s.paths && _changed(s.paths, statePaths)) statePaths = s.paths
     backupFiles = Number(s.backupFiles || 0)
     daemonVersion = String(s.version || "")
     stateUpdated()

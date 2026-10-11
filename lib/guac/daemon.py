@@ -59,6 +59,7 @@ MAX_SYNC_JOBS = 3  # folders syncing at once, each in its own rclone process
 DEBOUNCE = 4.0  # quiet time after a local change before syncing it
 FOLLOWUP_DEBOUNCE = 10.0  # changes seen while a sync ran (mostly its own writes)
 MAX_DIRTY_WAIT = 30.0  # never hold local changes back longer than this
+SCHEDULER_MAX_SLEEP = 30.0  # the scheduler looks this often even with nothing due
 MOUNT_TIMEOUT = 90.0
 MAX_WATCH_DIRS = 100000
 MAX_BROWSE_ENTRIES = 2000
@@ -83,6 +84,10 @@ _IGNORED_EVENT_NAMES = [
     ".DS_Store",
     "*.kate-swp",
 ]
+# One pattern for all of them: matched against every event in a burst of writes
+_IGNORED_EVENT_RE = re.compile(
+    "|".join(fnmatch.translate(p) for p in _IGNORED_EVENT_NAMES)
+)
 
 _SYSTEM_DIRS = [
     "/usr",
@@ -418,6 +423,15 @@ def _stats_speed(stats: dict[str, Any]) -> int:
     return int(per_file or (float(stats.get("speed") or 0) if moving else 0))
 
 
+def _batch_result(r: Any) -> dict[str, Any] | RcError:
+    """One entry of job/batch's results, as RcClient.call would have returned or raised it."""
+    if not isinstance(r, dict):
+        return {"result": r}
+    if "error" in r and "status" in r:
+        return RcError(str(r["error"]), int(r.get("status") or 0))
+    return r
+
+
 class Client:
     def __init__(self, writer: asyncio.StreamWriter):
         self.writer = writer
@@ -481,6 +495,8 @@ class Daemon:
         self._backups_pruned = 0.0
         self.backup_files = 0  # local files syncs replaced or deleted, kept in backups/
         self._filters_md5 = ""
+        self._filters_sig: Any = None
+        self._rc_batch = True  # until an rclone without job/batch says otherwise
         self._tasks: list[asyncio.Task] = []
         # Bound to the event loop on first use
         self._dirty = asyncio.Event()
@@ -497,6 +513,8 @@ class Daemon:
 
     def mark(self) -> None:
         self._dirty.set()
+        # Whatever changed may have made a folder due: the scheduler sleeps until told so
+        self._wake.set()
 
     def wake(self) -> None:
         self._wake.set()
@@ -517,6 +535,37 @@ class Daemon:
             return await asyncio.wait_for(fut, timeout + 5)
         except asyncio.TimeoutError:
             raise RcError(f"rclone {method} timed out")
+
+    async def rc_batch(
+        self, calls: list[tuple[str, dict[str, Any]]], timeout: float = 5.0
+    ) -> list[dict[str, Any] | RcError]:
+        """Quick engine calls in one request, so rclone wakes once instead of once per call.
+        Each result is the call's reply or its error; rclone without job/batch gets one each."""
+        if self._rc_batch:
+            try:
+                res = await self.rc(
+                    "job/batch",
+                    {
+                        "concurrency": 1,
+                        "inputs": [{"_path": method, **p} for method, p in calls],
+                    },
+                    timeout=timeout,
+                )
+            except RcError as e:
+                if e.status != 404:
+                    raise
+                self._rc_batch = False
+            else:
+                results = res.get("results")
+                if isinstance(results, list) and len(results) == len(calls):
+                    return [_batch_result(r) for r in results]
+        out: list[dict[str, Any] | RcError] = []
+        for method, p in calls:
+            try:
+                out.append(await self.rc(method, p, timeout=timeout))
+            except RcError as e:
+                out.append(e)
+        return out
 
     async def fs(self, fn: Callable, *args: Any, timeout: float = 5.0) -> Any:
         loop = asyncio.get_running_loop()
@@ -627,6 +676,7 @@ class Daemon:
         paths.ensure_private_dir(paths.backup_root())
         config.ensure_filters()
         self._spawn(self._ensure_local_root())
+        self._filters_sig = self._filters_signature()
         self._filters_md5 = self._filters_hash()
         if self.st.get("filters_md5") and self.st["filters_md5"] != self._filters_md5:
             self.st["filters_changed"] = True
@@ -1277,13 +1327,38 @@ class Daemon:
             return True
         return now >= f.next_due
 
+    def _folder_due_at(self, f: Folder, now: float) -> float:
+        """When _folder_due turns true for f if nothing else changes (inf: not by itself)."""
+        if f.paused or f.job_id or f.attention:
+            return float("inf")
+        if not f.initialized or f.resync_reason or f.force_next:
+            at = now
+        else:
+            at = f.next_due
+            if f.dirty_since:
+                at = min(at, f.last_event + DEBOUNCE, f.dirty_since + MAX_DIRTY_WAIT)
+        return max(at, f.retry_at)
+
+    def _scheduler_sleep(self, now: float) -> float:
+        """How long the scheduler can sleep before a folder is due. Folders due but held back
+        (all sync slots busy, offline, drive not loaded) are looked at again every second."""
+        due_at = min(
+            (self._folder_due_at(f, now) for f in self.folders.values()),
+            default=float("inf"),
+        )
+        if due_at <= now:
+            return 1.0
+        return min(max(due_at - now, 0.05), SCHEDULER_MAX_SLEEP)
+
     async def _scheduler(self) -> None:
+        sleep = SCHEDULER_MAX_SLEEP
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(self._wake.wait(), 1.0)
+                await asyncio.wait_for(self._wake.wait(), sleep)
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+            sleep = SCHEDULER_MAX_SLEEP
             if self.engine_state != "running":
                 continue
             now = time.time()
@@ -1328,6 +1403,7 @@ class Daemon:
                     started = False
                 if started:
                     running.append(f)
+            sleep = self._scheduler_sleep(time.time())
 
     async def _start_sync(self, f: Folder) -> bool:
         now = time.time()
@@ -1682,9 +1758,7 @@ class Daemon:
             f = self.folders.get(fid)
             if f is None:
                 continue
-            if ev.name and any(
-                fnmatch.fnmatchcase(ev.name, p) for p in _IGNORED_EVENT_NAMES
-            ):
+            if ev.name and _IGNORED_EVENT_RE.match(ev.name):
                 continue
             if ev.mask & IN_ISDIR and ev.mask & (IN_CREATE | IN_MOVED_TO):
                 self._spawn(self._add_watches(fid, os.path.join(dirpath, ev.name)))
@@ -1761,12 +1835,33 @@ class Daemon:
             for name, d in self.drives.items()
             if d.mount_state == "mounted"
         }
+        # What the engine knows, asked in one request. With nothing mounted there is nothing
+        # to lose and nothing streaming, so no need to ask rclone at all.
+        calls: list[tuple[str, dict[str, Any]]] = []
+        if mounted_before:
+            calls.append(("mount/listmounts", {}))
+        vfs_fs = {
+            name: self.drives[name].mounted_fs
+            for name in mounted_before
+            if self.drives[name].mounted_fs
+        }
+        calls += [("vfs/stats", {"fs": fs}) for fs in vfs_fs.values()]
+        if self._engine_streaming():
+            calls.append(("core/stats", {}))
         try:
-            mounts = await self.rc("mount/listmounts", timeout=5)
-            ours = {m.get("MountPoint") for m in mounts.get("mountPoints") or []}
+            replies = await self.rc_batch(calls) if calls else []
         except RcError:
             return
-        kernel = util.read_mountinfo()
+        mounts_reply = replies.pop(0) if mounted_before else {}
+        if isinstance(mounts_reply, RcError):
+            return
+        vfs_replies = dict(zip(vfs_fs, replies))
+        stats_reply = replies[len(vfs_fs)] if len(replies) > len(vfs_fs) else None
+        ours: set[Any] = set()
+        kernel: dict[str, dict[str, str]] = {}
+        if mounted_before:
+            ours = {m.get("MountPoint") for m in mounts_reply.get("mountPoints") or []}
+            kernel = util.read_mountinfo()
         for d in list(self.drives.values()):
             if (
                 d.mount_state == "mounted"
@@ -1785,7 +1880,11 @@ class Daemon:
                 self.mark()
             if d.mount_state == "mounted":
                 try:
-                    st = await self.rc("vfs/stats", {"fs": d.mounted_fs}, timeout=5)
+                    st = vfs_replies.get(d.name)
+                    if st is None or vfs_fs.get(d.name) != d.mounted_fs:
+                        st = await self.rc("vfs/stats", {"fs": d.mounted_fs}, timeout=5)
+                    elif isinstance(st, RcError):
+                        raise st
                     dc = st.get("diskCache") or {}
                     uploads = int(dc.get("uploadsInProgress", 0)) + int(
                         dc.get("uploadsQueued", 0)
@@ -1827,10 +1926,20 @@ class Daemon:
                 await self._poll_job(f)
 
         try:
-            stats = await self.rc("core/stats", {}, timeout=5)
-            # The engine moves streamed files; syncs report through their own processes
-            moving = [str(t.get("name", "")) for t in stats.get("transferring") or []]
-            speed = _stats_speed(stats)
+            # The engine moves streamed files, so only while a drive is mounted; syncs report
+            # through their own processes
+            moving: list[str] = []
+            speed = 0
+            if self._engine_streaming():
+                stats = stats_reply
+                if stats is None:
+                    stats = await self.rc("core/stats", {}, timeout=5)
+                elif isinstance(stats, RcError):
+                    raise stats
+                moving = [
+                    str(t.get("name", "")) for t in stats.get("transferring") or []
+                ]
+                speed = _stats_speed(stats)
             for f in self.folders.values():
                 if f.job_id:
                     moving += f.moving
@@ -1847,6 +1956,12 @@ class Daemon:
                 self.mark()
         except RcError:
             pass
+
+    def _engine_streaming(self) -> bool:
+        return any(
+            d.mount_state in ("mounting", "mounted", "unmounting")
+            for d in self.drives.values()
+        )
 
     def _on_resume(self) -> None:
         now = time.time()
@@ -1882,7 +1997,12 @@ class Daemon:
                     await self._refresh_recent()
                 if self.online:
                     await self._refresh_quotas(now)
-                md5 = self._filters_hash()
+                # Read and hashed again only when the file was touched
+                sig = self._filters_signature()
+                md5 = self._filters_md5
+                if sig != self._filters_sig:
+                    self._filters_sig = sig
+                    md5 = self._filters_hash()
                 if md5 != self._filters_md5:
                     log.info("filters changed: next syncs are resyncs")
                     self._filters_md5 = self.st["filters_md5"] = md5
@@ -1907,6 +2027,13 @@ class Daemon:
                     self.mark()
             except Exception:
                 log.exception("maintenance failed")
+
+    def _filters_signature(self) -> Any:
+        try:
+            st = paths.filters_file().stat()
+            return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        except OSError:
+            return None
 
     def _filters_hash(self) -> str:
         try:

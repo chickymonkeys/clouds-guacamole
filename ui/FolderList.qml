@@ -16,6 +16,8 @@ Item {
   property string fontFamily: Style.font.family
   property string home: ""
   property bool open: false
+  // Off while the panel is closed: spinners in a hidden window still tick
+  property bool animate: true
 
   signal toggled()
   signal keepFolderRequested()
@@ -101,7 +103,7 @@ Item {
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             RotationAnimation on rotation {
-              running: root.busy
+              running: root.busy && root.animate
               from: 0
               to: 360
               duration: 1100
@@ -182,6 +184,7 @@ Item {
         foreground: root.foreground
         fontFamily: root.fontFamily
         home: root.home
+        animate: root.animate
         Behavior on Layout.preferredHeight { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
         Behavior on opacity { NumberAnimation { duration: 140 } }
       }
