@@ -37,6 +37,11 @@ def filters_file() -> Path:
     return config_dir() / "filters.txt"
 
 
+def folder_filters_file(folder_id: str) -> Path:
+    """A folder's own never-synced patterns, written from config.json for bisync."""
+    return state_dir() / "filters" / f"{folder_id}.txt"
+
+
 def state_file() -> Path:
     return state_dir() / "state.json"
 

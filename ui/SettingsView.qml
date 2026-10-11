@@ -16,6 +16,22 @@ Item {
 
   readonly property color dim: Qt.darker(foreground, 1.6)
   readonly property var s: service ? service.appSettings : ({})
+  property bool editingFilters: false
+  readonly property var globalExcludes: service ? (service.filters.excludes || []) : []
+  // Folders with their own list, which the global one doesn't reach
+  readonly property var ownListFolders: {
+    var out = []
+    var drives = service ? service.drives : []
+    for (var i = 0; i < drives.length; i++)
+      for (var j = 0; j < (drives[i].folders || []).length; j++)
+        if ((drives[i].folders[j].excludes || []).length > 0) out.push(drives[i].folders[j].name)
+    return out
+  }
+
+  function openFilters() {
+    filterEditor.reset(globalExcludes, globalExcludes)
+    editingFilters = true
+  }
 
   implicitHeight: col.implicitHeight
 
@@ -25,6 +41,7 @@ Item {
     cacheSizeField.value = Number(s.cache_max_size_gb || 20)
     intervalField.value = Number(s.sync_interval_min || 5)
     backupField.value = Number(s.backup_days || 30)
+    editingFilters = false
   }
 
   component Label: Text {
@@ -50,6 +67,8 @@ Item {
     property string text: ""
     property string iconText: ""
     property string tooltipText: ""
+    // Its panel is open below the row
+    property bool active: false
     signal clicked()
 
     Layout.fillWidth: true
@@ -59,8 +78,9 @@ Item {
     radius: Style.cornerRadius
     opacity: enabled ? 1 : 0.45
     color: tileMouse.pressed ? Style.pressedFillFor(root.foreground, Color.accent)
-         : tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
-    borderSpec: Border.controlSpec(tileMouse.containsMouse ? "hover-cursor" : "normal", root.foreground, Color.accent)
+         : tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent)
+         : tile.active ? Qt.alpha(Color.accent, 0.10) : "transparent"
+    borderSpec: Border.controlSpec(tile.active ? "selected" : (tileMouse.containsMouse ? "hover-cursor" : "normal"), root.foreground, Color.accent)
 
     Column {
       id: tileCol
@@ -72,7 +92,7 @@ Item {
         text: tile.iconText
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
-        color: tileMouse.containsMouse ? Color.accent : root.foreground
+        color: tileMouse.containsMouse || tile.active ? Color.accent : root.foreground
       }
 
       Text {
@@ -321,9 +341,10 @@ Item {
           EngineAction {
             text: "Filters"
             iconText: "󰈲"
-            tooltipText: "Files that are never synced, in your editor. Changing them makes the next syncs safe resyncs."
-            enabled: (root.service.statePaths.filters || "") !== ""
-            onClicked: root.service.openPath(root.service.statePaths.filters)
+            tooltipText: "Files that are never synced, by any folder without its own list. Changing them makes the next syncs safe resyncs."
+            enabled: root.service.connected
+            active: root.editingFilters
+            onClicked: root.editingFilters ? (root.editingFilters = false) : root.openFilters()
           }
 
           EngineAction {
@@ -337,6 +358,99 @@ Item {
               if (root.service.backupFiles > 0) root.service.openPath(root.service.statePaths.backups)
               else root.service.notice("No local file has been replaced yet. When a sync overwrites or deletes one, the old copy is kept here for "
                                        + (root.s.backup_days || 30) + " days.")
+            }
+          }
+        }
+
+        // Filters: the global never-synced patterns, kept in filters.txt
+        ColumnLayout {
+          visible: root.editingFilters
+          Layout.fillWidth: true
+          Layout.topMargin: Style.space(6)
+          spacing: Style.space(8)
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 0
+              Label { text: "Never synced, in all folders" }
+              Hint {
+                text: root.ownListFolders.length === 0
+                      ? "Matching files and folders stay where they are: not uploaded, not downloaded."
+                      : (root.ownListFolders.length === 1 ? root.ownListFolders[0] + " has"
+                         : root.ownListFolders.slice(0, 2).join(" and ") + (root.ownListFolders.length > 2 ? " and " + (root.ownListFolders.length - 2) + " more" : "") + " have")
+                        + " a list of " + (root.ownListFolders.length === 1 ? "its" : "their") + " own, which this doesn't change."
+              }
+            }
+
+            Button {
+              text: "filters.txt"
+              iconText: "󰏫"
+              tooltipText: "Open the file in your editor, for rules beyond never-sync patterns (rclone filter syntax)"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption - Style.space(1)
+              foreground: root.foreground
+              bordered: false
+              enabled: (root.service.statePaths.filters || "") !== ""
+              onClicked: root.service.openPath(root.service.statePaths.filters)
+            }
+          }
+
+          ExcludeEditor {
+            id: filterEditor
+            Layout.fillWidth: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Hint {
+            visible: (root.service.filters.otherRules || 0) > 0
+            text: "filters.txt also has " + root.service.filters.otherRules
+                  + (root.service.filters.otherRules === 1 ? " other rule" : " other rules") + ", kept as they are."
+          }
+
+          Text {
+            visible: filterEditor.edited
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: Model.filterChangeText(filterEditor.added.length, filterEditor.removed.length, "", false)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption - Style.space(2)
+            color: Color.accent
+            wrapMode: Text.WordWrap
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(8)
+
+            Button {
+              text: "Save"
+              iconText: "󰄬"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: true
+              enabled: filterEditor.edited && !filterEditor.blocked
+              opacity: enabled ? 1.0 : 0.45
+              onClicked: {
+                root.service.setExcludes("", filterEditor.result)
+                root.editingFilters = false
+              }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+              text: filterEditor.edited ? "Cancel" : "Close"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              bordered: false
+              onClicked: root.editingFilters = false
             }
           }
         }

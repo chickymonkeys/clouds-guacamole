@@ -300,6 +300,10 @@ def scene(name: str):
             "backups": str(paths / "backups"),
         },
         "backupFiles": 12,
+        "filters": {
+            "excludes": ["*.tmp", "*.swp", ".DS_Store", "Thumbs.db"],
+            "otherRules": 0,
+        },
     }
 
 

@@ -121,6 +121,14 @@ Item {
     panelFlick.contentY = 0
   }
 
+  Connections {
+    target: root.service
+    function onFiltersRequested() {
+      root.showView("settings")
+      settingsView.openFilters()
+    }
+  }
+
   function openBrowse(remote) {
     service.clearError()
     var d = service.driveByName(remote)

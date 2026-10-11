@@ -402,6 +402,24 @@ def main(argv: list[str] | None = None) -> None:
     )
     s.add_argument("folder", help="Folder id, alias, REMOTE:PATH or local path")
     s.add_argument("alias", nargs="?", default="")
+    s = sub.add_parser(
+        "exclude",
+        help="Never-synced patterns: the global list, or a folder's own that replaces it",
+    )
+    s.add_argument(
+        "folder",
+        nargs="?",
+        default="",
+        help="Folder id, alias, REMOTE:PATH or local path (omit: the global list)",
+    )
+    s.add_argument("--add", action="append", default=[], metavar="PATTERN")
+    s.add_argument("--remove", action="append", default=[], metavar="PATTERN")
+    s.add_argument(
+        "--global",
+        dest="use_global",
+        action="store_true",
+        help="The folder uses the global list again",
+    )
     s = sub.add_parser("set-path", help="Where a drive is mounted (empty: default)")
     s.add_argument("remote")
     s.add_argument("path")
@@ -583,6 +601,35 @@ def main(argv: list[str] | None = None) -> None:
         _run("set_drive", {"remote": a.remote, "label": a.label})
     elif a.cmd == "alias":
         _run("set_folder", {"id": _find_folder(a.folder), "label": a.alias})
+    elif a.cmd == "exclude":
+        state = _state()
+        fid = _find_folder(a.folder) if a.folder else ""
+        folder = next(
+            (
+                f
+                for d in state.get("drives", [])
+                for f in d["folders"]
+                if f["id"] == fid
+            ),
+            {},
+        )
+        own = list(folder.get("excludes") or [])
+        current = own or list(state.get("filters", {}).get("excludes") or [])
+        if a.use_global:
+            patterns = []
+        elif a.add or a.remove:
+            # A folder's first change starts from the global list it was using
+            patterns = [p for p in current if p not in a.remove]
+            patterns += [p for p in a.add if p not in patterns]
+        else:
+            source = "its own list" if own else "the global list"
+            if fid:
+                print(f"{folder.get('name') or fid} uses {source}:")
+            for p in current:
+                print(f"  {p}")
+            return
+        args = {"patterns": patterns, "id": fid} if fid else {"patterns": patterns}
+        _run("set_excludes", args)
     elif a.cmd == "set-path":
         _run("set_drive", {"remote": a.remote, "mount_path": a.path})
     elif a.cmd == "config":
