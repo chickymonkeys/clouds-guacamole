@@ -68,12 +68,13 @@ function folderStateText(f) {
   switch (f.state) {
     case "syncing": {
       var p = f.progress || {}
-      if (p.totalTransfers > 0) return (f.resync ? "first sync " : "syncing ") + p.transfers + "/" + p.totalTransfers
-      return f.resync ? "first sync…" : "syncing…"
+      var verb = f.resync ? (f.initialized ? "resyncing" : "first sync") : "syncing"
+      if (p.totalTransfers > 0) return verb + " " + p.transfers + "/" + p.totalTransfers
+      return verb + "…"
     }
     case "synced": return "synced " + ago(f.lastSync)
     case "changes": return "changes pending"
-    case "pending": return "waiting to sync"
+    case "pending": return f.resync && f.initialized ? "waiting to resync" : "waiting to sync"
     case "waiting": return "offline, will sync"
     case "paused": return f.localChanges ? "paused, changes waiting" : "paused"
     case "attention": return "needs attention"
@@ -87,7 +88,7 @@ function folderStateText(f) {
 // just added shows because adding one opens the list.
 function folderStaysListed(f) {
   if (!f) return false
-  if (f.state === "attention" || f.state === "error") return true
+  if (f.attention || f.state === "attention" || f.state === "error") return true
   return (f.conflictCount || 0) > 0 || (f.watchError || "") !== ""
 }
 
@@ -96,7 +97,10 @@ function folderGroup(list) {
   var attention = 0, retrying = 0, syncing = 0, pending = 0, offline = 0, paused = 0
   for (var i = 0; i < list.length; i++) {
     var f = list[i] || {}
-    if (f.state === "attention") attention++
+    if (f.attention || f.state === "attention" || (f.conflictCount || 0) > 0) {
+      attention++
+      if (f.state === "syncing") syncing++
+    }
     else if (f.state === "error") retrying++
     else if (f.state === "paused") paused++
     else if (f.state === "syncing") syncing++

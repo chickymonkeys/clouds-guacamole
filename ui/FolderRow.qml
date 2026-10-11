@@ -22,7 +22,7 @@ CursorSurface {
   readonly property color dim: Qt.darker(foreground, 1.6)
   readonly property string state_: folder.state || ""
   readonly property bool syncing: state_ === "syncing"
-  readonly property bool needsAttention: state_ === "attention"
+  readonly property bool needsAttention: state_ === "attention" || (folder.attention || "") !== ""
   readonly property bool showActions: hover.hovered || confirmingRemove || editing || filtering
   // The name and everything under it start here
   readonly property real glyphWidth: Style.space(16)
@@ -571,7 +571,7 @@ CursorSurface {
             }
 
             Button {
-              visible: parent.code === "safety" || parent.code === "empty"
+              visible: (parent.code === "safety" || parent.code === "empty") && !root.folder.resync
               text: "Sync anyway"
               tooltipText: "Apply the deletions to the other side too"
               fontFamily: root.fontFamily
