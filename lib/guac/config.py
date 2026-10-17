@@ -121,13 +121,20 @@ def _normalize_excludes(value: Any) -> list[str] | None:
     return out[: filters.MAX_PATTERNS] or None
 
 
-def _read_json(path: Path) -> Any | None:
+def _read_json(path: Path, *, require_object: bool = False) -> Any | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if require_object and not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        return data
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as e:
+        if require_object:
+            raise ValueError(
+                f"Could not load {path}; existing configuration left unchanged: {e}"
+            ) from e
         log.warning("could not read %s: %s", path, e)
         return None
 
@@ -171,8 +178,9 @@ def normalize_remote(entry: Any) -> dict[str, Any]:
 
 
 def load() -> dict[str, Any]:
-    raw = _read_json(paths.config_file())
-    fresh = not isinstance(raw, dict)
+    # Defaults may create a missing file, never replace an unreadable or invalid one.
+    raw = _read_json(paths.config_file(), require_object=True)
+    fresh = raw is None
     if fresh:
         raw = {}
     cfg = copy.deepcopy(DEFAULTS)
