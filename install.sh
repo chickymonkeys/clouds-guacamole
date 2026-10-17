@@ -52,6 +52,11 @@ is_ours() {
   fi
 }
 
+cli_link_is_ours() {
+  # -m also resolves dangling links, without mistaking another project's bin/guac for ours.
+  [[ -L $CLI_LINK && "$(readlink -m "$CLI_LINK")" == "$(readlink -m "$PLUGIN_DIR/bin/guac")" ]]
+}
+
 reload_shell() {
   command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 }
@@ -93,10 +98,12 @@ restart_after_update() {
 }
 
 if [[ $MODE == "uninstall" ]]; then
-  stop_daemon
+  REMOVE_CLI=false
+  cli_link_is_ours && REMOVE_CLI=true
   if command -v omarchy >/dev/null 2>&1; then
     omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true
   fi
+  stop_daemon
   if [[ -e $PLUGIN_DIR || -L $PLUGIN_DIR ]]; then
     if is_ours; then
       if [[ -L $PLUGIN_DIR ]]; then rm "$PLUGIN_DIR"; else rm -rf "$PLUGIN_DIR"; fi
@@ -105,7 +112,7 @@ if [[ $MODE == "uninstall" ]]; then
       warn "Left $PLUGIN_DIR alone: it wasn't installed by this script (use: omarchy plugin remove $PLUGIN_ID)"
     fi
   fi
-  if [[ -L $CLI_LINK && "$(readlink -f "$CLI_LINK")" == */bin/guac ]]; then
+  if $REMOVE_CLI; then
     rm "$CLI_LINK"
     say "Removed $CLI_LINK"
   fi
@@ -147,7 +154,7 @@ if [[ ! -e $PLUGIN_DIR ]]; then
 fi
 
 mkdir -p "$(dirname "$CLI_LINK")"
-if [[ ! -e $CLI_LINK || ( -L $CLI_LINK && "$(readlink -f "$CLI_LINK")" == */bin/guac ) ]]; then
+if [[ ! -e $CLI_LINK && ! -L $CLI_LINK ]] || cli_link_is_ours; then
   ln -sfn "$PLUGIN_DIR/bin/guac" "$CLI_LINK"
   say "Linked $CLI_LINK"
 else
