@@ -334,8 +334,9 @@ def test_excludes(sb: Sandbox) -> None:
         wait(lambda: sb.folder(fid)["state"] == "synced", 40, "settled")
 
     def resynced(mark: int) -> bool:
-        return re.search(
-            rf"sync {fid} \(.*\) started \[resync\]", log.read_text()[mark:]
+        return (
+            re.search(rf"sync {fid} \(.*\) started \[resync\]", log.read_text()[mark:])
+            is not None
         )
 
     def stays_quiet(mark: int) -> None:

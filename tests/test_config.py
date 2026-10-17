@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
@@ -48,6 +49,42 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(entry["hidden_hints"], ["3", "shared_app"])
         self.assertEqual(config.normalize_remote({})["hidden_hints"], [])
+
+    def test_invalid_config_is_not_overwritten(self) -> None:
+        from guac import config, paths
+
+        path = paths.config_file()
+        path.parent.mkdir(parents=True)
+        for original in (b"{broken", b"[]", b"null", b'"text"', b"false", b"", b"\xff"):
+            with self.subTest(original=original):
+                path.write_bytes(original)
+                with self.assertRaisesRegex(ValueError, "configuration left unchanged"):
+                    config.load()
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_unreadable_config_is_not_overwritten(self) -> None:
+        from guac import config, paths
+
+        path = paths.config_file()
+        path.parent.mkdir(parents=True)
+        original = b'{"mount_root": "~/MyCloud", "remotes": {}}\n'
+        path.write_bytes(original)
+        with (
+            patch("builtins.open", side_effect=PermissionError("access denied")),
+            self.assertRaisesRegex(ValueError, "configuration left unchanged"),
+        ):
+            config.load()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_existing_config_is_not_rewritten_on_load(self) -> None:
+        from guac import config, paths
+
+        path = paths.config_file()
+        path.parent.mkdir(parents=True)
+        original = b'{"mount_root": "~/MyCloud", "custom_key": "preserve me"}\n'
+        path.write_bytes(original)
+        self.assertEqual(config.load()["mount_root"], "~/MyCloud")
+        self.assertEqual(path.read_bytes(), original)
 
     def test_folder_alias(self) -> None:
         from guac import config

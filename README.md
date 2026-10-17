@@ -104,6 +104,10 @@ Requirements: Omarchy 4 (Quickshell shell), `rclone`, `fuse3`, Python 3.10 or ne
 omarchy plugin add https://github.com/chickymonkeys/clouds-guacamole --enable
 ```
 
+This installs the widget and its background service code; it does not install the dependencies or run `install.sh`. Install missing dependencies with `sudo pacman -S rclone fuse3 python`.
+
+The CLI is included at `~/.config/omarchy/plugins/chickymonkeys.guacamole/bin/guac`. When following the `guac` examples below, use that full path (or `./bin/guac` from a checkout). The local installer below also creates a `~/.local/bin/guac` shortcut, if that name is free.
+
 Or from a checkout:
 
 ```bash
@@ -117,6 +121,44 @@ Running it again updates an existing install and restarts the shell and `guacd` 
 The widget starts `guacd` on demand as a transient systemd user unit (`guacamole.service`). It survives shell restarts and plugin reloads and stops cleanly at logout, and drives you were streaming are mounted again when it starts. To start it at login even without the bar widget, run `guac service install`.
 
 Remotes already in your rclone config appear as drives right away, not streamed until you turn them on. If another program already mounted something at a drive's folder, the card says **in use elsewhere** and offers **Take over**.
+
+### Update
+
+For an installation made with `omarchy plugin add`:
+
+```bash
+omarchy plugin update chickymonkeys.guacamole
+```
+
+Wait for uploads and local-folder syncs to finish, then stop `guacd` with the installed CLI and restart the shell with `omarchy restart shell` so both the service and widget load the new code. The widget starts `guacd` again. For a local installation, update your checkout and rerun `./install.sh` instead.
+
+### Remove
+
+**Wait for uploads and local-folder syncs to finish first.** Removing the widget alone does not stop the background service.
+
+For an installation made with `omarchy plugin add`, first disable the widget so it cannot restart the service:
+
+```bash
+omarchy plugin disable chickymonkeys.guacamole
+```
+
+If you previously ran `guac service install` to start it at login, remove that optional login service **before removing the plugin files**:
+
+```bash
+~/.config/omarchy/plugins/chickymonkeys.guacamole/bin/guac service uninstall
+```
+
+Then stop the daemon, wait for its systemd user unit to finish stopping, and remove the plugin:
+
+```bash
+~/.config/omarchy/plugins/chickymonkeys.guacamole/bin/guac stop
+systemctl --user stop guacamole.service
+omarchy plugin remove chickymonkeys.guacamole
+```
+
+If the service is already stopped, systemctl may report that the unit is not loaded. If you installed from a local checkout, use `./install.sh --uninstall` instead (remove the optional login service first, if enabled). Do not use the local uninstaller to remove an installation made with `omarchy plugin add`.
+
+Removal keeps your cloud files, folders kept on this device, rclone accounts and credentials, Guacamole settings, backups, sync state, and rclone cache. It does not delete `~/Cloud/Sync`, `~/.config/guacamole`, `~/.local/state/guacamole`, `~/.config/rclone`, or `~/.cache/rclone` (or their configured/XDG locations). If you manually created a `guac` shortcut, remove only that shortcut once you have confirmed it points to this plugin.
 
 ## The widget
 
@@ -138,7 +180,7 @@ Remotes already in your rclone config appear as drives right away, not streamed 
 
 <table>
   <tr>
-    <td valign="top" width="50%"><img src="docs/images/folder-list.png" width="400" alt="Drive keeping nine folders with its list closed: one line saying 9 local folders, 2 syncing, and the folder with a conflict still listed under it. Dropbox's folder is closed to one line too"></td>
+    <td valign="top" width="50%"><img src="docs/images/folder-list.png" width="400" alt="Drive keeping nine folders with its list closed: the folder needing attention remains visible with its conflict notice. Dropbox's folder is closed to one line too"></td>
     <td valign="top" width="50%"><img src="docs/images/folder-list-open.png" width="400" alt="The same list open: nine folders one line each, two of them syncing with their progress, current file and speed, then Keep a folder on this device"></td>
   </tr>
   <tr>
@@ -157,6 +199,8 @@ Remotes already in your rclone config appear as drives right away, not streamed 
     <td align="center">Settings</td>
   </tr>
 </table>
+
+<p align="center"><img src="docs/images/filters.png" width="400" alt="Settings with the Engine filter editor open: saved never-synced patterns, a draft build/ pattern with a plain-language explanation, and Save and Cancel controls"></p>
 
 ## Command line
 
@@ -206,6 +250,7 @@ Accounts and credentials stay in rclone's own config (`~/.config/rclone/rclone.c
 
 ```bash
 tests/test_config.py   # settings, provider guides and client checks, path rules
+python3 tests/test_install.py  # local installer lifecycle, ownership checks, retained user data
 tests/test_daemon.py   # end-to-end: real FUSE mounts and bisync on throwaway local remotes
 python3 tests/test_recovery.py  # failure transitions, real local bisync jobs and the widget off-screen
 ```

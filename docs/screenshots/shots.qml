@@ -136,10 +136,15 @@ ShellRoot {
   function step(desc, fn, delay) { queue.push({ desc: desc, fn: fn, delay: delay === undefined ? 700 : delay }) }
   function shot(name, item) {
     step("shot " + name, function() {
-      (item || card).grabToImage(function(r) {
-        r.saveToFile(shell.out + "/" + name + ".png")
+      var target = item || card
+      if (!target.grabToImage(function(r) {
+        if (!r.saveToFile(shell.out + "/" + name + ".png")) {
+          fails++
+          console.log("SHOT FAIL saving " + name)
+          return
+        }
         console.log("SHOT saved " + name)
-      })
+      })) throw new Error("could not capture " + name)
     }, 600)
   }
 
@@ -230,7 +235,8 @@ ShellRoot {
     step("guide: paste", function() {
       var fields = shown(byProp("stepCount")).filter(function(i) { return i.placeholderText !== undefined && i.password !== undefined })
       // Obviously fake values in Google's format: never paste real credentials here
-      fields[0].text = "000000000000-fakeclientforscreenshots.apps.googleusercontent.com"
+      fields[0].text = "000000000000-demo.apps.googleusercontent.com"
+      fields[0].cursorPosition = 0
       fields[1].text = "fake-secret-for-screenshots"
       return byProp("stepCount").valid
     }, 900)
@@ -246,6 +252,13 @@ ShellRoot {
     shot("add-drive")
     step("settings", function() { content.showView("settings") }, 1000)
     shot("settings")
+    step("open filters", function() { byProp("editingFilters").openFilters() })
+    step("preview a never-synced pattern", function() {
+      var editor = byProp("helpOpen")
+      shown(editor).filter(function(i) { return i.placeholderText === "Add a pattern, e.g. *.log or build/" })[0].text = "build/"
+      return editor.edited && !editor.blocked
+    })
+    shot("filters")
     shot("bar-states", barStates)
   }
 }
