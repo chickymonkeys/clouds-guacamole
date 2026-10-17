@@ -6,7 +6,7 @@ The demo guacd speaks guacd's socket protocol and serves made-up drives, folders
 rclone, mount or sync is involved. Quickshell runs with a throwaway home, so no real path or
 file name can reach a screenshot; only the current Omarchy theme is linked in.
 
-    docs/screenshots/render.py            # writes docs/images/*.png
+    docs/screenshots/render.py            # writes docs/images/*.png and root preview.png
 """
 
 import json
@@ -50,9 +50,12 @@ def folder(remote: str, path: str, fid: str, **kw):
         "remote": remote,
         "path": path,
         "name": os.path.basename(path),
+        "label": "",
+        "defaultName": os.path.basename(path),
         "local": str(HOME / "Cloud" / "Sync" / remote / path),
         "state": "synced",
         "paused": False,
+        "localChanges": False,
         "initialized": True,
         "lastSync": ago(120),
         "lastChanges": 0,
@@ -67,6 +70,7 @@ def folder(remote: str, path: str, fid: str, **kw):
         "conflictCount": 0,
         "watching": True,
         "watchError": "",
+        "excludes": [],
     }
     f.update(kw)
     return f
@@ -279,7 +283,11 @@ def scene(name: str):
             "mounted": sum(1 for d in drives if d["mounted"]),
             "folders": len(folders),
             "syncing": states.count("syncing"),
-            "attention": states.count("attention") + states.count("error"),
+            "attention": sum(
+                1
+                for f in folders
+                if f["attention"] or f["state"] == "error" or f["conflictCount"]
+            ),
             "uploads": sum(d["uploads"] for d in drives),
         },
         "transfers": transfers,
@@ -424,7 +432,11 @@ def main() -> int:
         sys.exit("needs Quickshell (qs) and the Omarchy shell in " + str(SHELL))
     OUT.mkdir(parents=True, exist_ok=True)
     try:
-        return render()
+        result = render()
+        if result == 0:
+            shutil.copyfile(OUT / "panel.png", REPO / "preview.png")
+            print("SHOT refreshed preview.png from panel.png")
+        return result
     finally:
         shutil.rmtree(ROOT)
 
