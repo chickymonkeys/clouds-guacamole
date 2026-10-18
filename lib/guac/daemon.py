@@ -3619,11 +3619,17 @@ class Daemon:
         }
 
 
+class _SafeLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        # Escape the formatted result, including exception text, for both handlers.
+        return util.neutralize_controls(super().format(record), multiline=True)
+
+
 def _setup_logging(verbose: bool) -> None:
     paths.ensure_private_dir(paths.state_dir())
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    fmt = _SafeLogFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     fh = logging.handlers.RotatingFileHandler(
         paths.daemon_log(), maxBytes=1 << 20, backupCount=1, encoding="utf-8"
     )
@@ -3635,7 +3641,7 @@ def _setup_logging(verbose: bool) -> None:
         pass
     if sys.stderr and (sys.stderr.isatty() or os.environ.get("JOURNAL_STREAM")):
         sh = logging.StreamHandler()
-        sh.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        sh.setFormatter(_SafeLogFormatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(sh)
 
 
