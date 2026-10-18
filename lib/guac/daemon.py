@@ -755,6 +755,7 @@ class Daemon:
         self.mark()
 
     async def _start_server(self) -> asyncio.AbstractServer:
+        paths.ensure_runtime_dir()
         sock_path = paths.daemon_socket()
         try:
             sock_path.unlink()
@@ -763,7 +764,6 @@ class Daemon:
         # Private through its 0700 folder, then by its own mode. Never via os.umask: that is
         # process-wide, and folders created meanwhile by other threads (the sync root) would
         # lose their execute bit and refuse every file
-        paths.ensure_private_dir(sock_path.parent)
         server = await asyncio.start_unix_server(
             self._handle_client, path=str(sock_path), limit=CLIENT_LINE_LIMIT
         )
@@ -3640,7 +3640,7 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def main(verbose: bool = False) -> int:
-    paths.ensure_private_dir(paths.runtime_dir())
+    paths.ensure_runtime_dir()
     lock_fd = os.open(paths.daemon_lock(), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

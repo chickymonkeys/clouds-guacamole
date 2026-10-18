@@ -1,6 +1,7 @@
 """Where Guacamole keeps its files. Everything follows the XDG base directory spec."""
 
 import os
+import stat
 from pathlib import Path
 
 APP = "guacamole"
@@ -24,8 +25,46 @@ def state_dir() -> Path:
 def runtime_dir() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR")
     path = Path(base) / APP if base else Path(f"/tmp/{APP}-{os.getuid()}")
-    if len(str(path)) + len("/sync-00000000.sock") > _MAX_SOCKET_PATH:
+    if len(os.fsencode(path)) + len(b"/sync-00000000.sock") > _MAX_SOCKET_PATH:
         path = Path(f"/tmp/{APP}-{os.getuid()}")
+    return path
+
+
+def ensure_runtime_dir() -> Path:
+    """Create/validate the socket directory without following symlinks.
+
+    Every ancestor must prevent other users from replacing its children. Root's
+    sticky /tmp is safe only because we also check ownership of each child. Never
+    chmod an existing directory: it may belong to somebody else, or contain files
+    planted while it was writable by others.
+    """
+    path = runtime_dir()
+    if not path.is_absolute() or ".." in path.parts:
+        raise PermissionError(f"Unsafe Guacamole runtime directory: {path}")
+    uid = os.getuid()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open("/", flags)
+    try:
+        for i, part in enumerate(path.parts[1:], 1):
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=fd)
+            except FileExistsError:
+                pass
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            info = os.fstat(fd)
+            mode = stat.S_IMODE(info.st_mode)
+            if i == len(path.parts) - 1:
+                safe = info.st_uid == uid and mode == 0o700
+            else:
+                safe = info.st_uid in (0, uid) and (
+                    not mode & 0o022 or (info.st_uid == 0 and mode & stat.S_ISVTX)
+                )
+            if not safe:
+                raise PermissionError(f"Unsafe Guacamole runtime directory: {path}")
+    finally:
+        os.close(fd)
     return path
 
 

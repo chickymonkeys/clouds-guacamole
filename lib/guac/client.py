@@ -2,8 +2,10 @@
 
 import json
 import os
+import selectors
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -42,15 +44,34 @@ class DaemonError(Exception):
     pass
 
 
+class UnsafeDaemonError(DaemonError):
+    """Authentication failed; do not autostart or retry against this endpoint."""
+
+
 class Connection:
     def __init__(self, timeout: float = 10.0):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         try:
+            paths.ensure_runtime_dir()
+        except OSError as e:
+            self.sock.close()
+            raise UnsafeDaemonError(f"Cannot trust guacd runtime directory: {e}") from e
+        try:
             self.sock.connect(str(paths.daemon_socket()))
         except OSError as e:
             self.sock.close()
             raise DaemonError(f"guacd is not running ({e})") from e
+        try:
+            creds = self.sock.getsockopt(
+                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+            )
+            _, uid, _ = struct.unpack("3i", creds)
+            if uid != os.getuid():
+                raise UnsafeDaemonError("Refusing guacd socket owned by another user")
+        except (OSError, struct.error, DaemonError) as e:
+            self.sock.close()
+            raise UnsafeDaemonError(f"Cannot authenticate guacd: {e}") from e
         self.file = self.sock.makefile("rb")
         self._next_id = 1
         self.state: dict[str, Any] | None = None
@@ -94,6 +115,8 @@ class Connection:
 def is_running() -> bool:
     try:
         conn = Connection(timeout=3)
+    except UnsafeDaemonError:
+        raise
     except DaemonError:
         return False
     try:
@@ -195,6 +218,8 @@ def start(wait: float = 15.0) -> str:
 def connect(autostart: bool = True) -> Connection:
     try:
         conn = Connection()
+    except UnsafeDaemonError:
+        raise
     except DaemonError:
         if not autostart:
             raise
@@ -202,3 +227,31 @@ def connect(autostart: bool = True) -> Connection:
         conn = Connection()
     conn.first_state()
     return conn
+
+
+def bridge() -> None:
+    """Relay the widget's private stdin/stdout pipes to an authenticated daemon.
+
+    Quickshell's Socket does not expose SO_PEERCRED. Keep one connection and push
+    updates as before, but authenticate in Python before forwarding any bytes.
+    No credentials appear in argv or stderr. EOF on either side closes the relay.
+    """
+    conn = Connection()
+    try:
+        conn.sock.settimeout(None)
+        print('{"type":"connected"}', flush=True)
+        with selectors.DefaultSelector() as selector:
+            selector.register(sys.stdin.buffer, selectors.EVENT_READ)
+            selector.register(conn.sock, selectors.EVENT_READ)
+            while True:
+                for key, _ in selector.select():
+                    data = os.read(key.fd, 65536)
+                    if not data:
+                        return
+                    if key.fileobj is conn.sock:
+                        sys.stdout.buffer.write(data)
+                        sys.stdout.buffer.flush()
+                    else:
+                        conn.sock.sendall(data)
+    finally:
+        conn.close()
