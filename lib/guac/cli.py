@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, NoReturn
 
 from . import __version__, client, config, paths, providers, util
 
@@ -23,8 +23,25 @@ BOLD, DIM, GREEN, YELLOW, RED, RESET = (
 )
 
 
-def _color(enabled: bool):
+def _text(value: Any) -> str:
+    """Escape data at the human-output boundary, before adding our own styling."""
+    return util.neutralize_controls(str(value))
+
+
+def _fail(message: str) -> NoReturn:
+    sys.exit(_text(message))
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        super().error(_text(message))
+
+
+def _escaped_style(enabled: bool):
+    """Escape display text before optionally adding trusted ANSI styling."""
+
     def c(code: str, text: str) -> str:
+        text = _text(text)
         return f"{code}{text}{RESET}" if enabled else text
 
     return c
@@ -44,7 +61,7 @@ def _ago(ts: float) -> str:
 
 
 def print_status(state: dict[str, Any]) -> None:
-    c = _color(sys.stdout.isatty())
+    c = _escaped_style(sys.stdout.isatty())
     eng = state.get("engine", {})
     print(
         c(BOLD, "Clouds Guacamole")
@@ -75,7 +92,7 @@ def print_status(state: dict[str, Any]) -> None:
             "waiting": c(YELLOW, "◌ waiting"),
             "error": c(RED, "✗ error"),
             "foreign": c(RED, "✗ in use"),
-        }.get(ms, ms)
+        }.get(ms, _text(ms))
         quota = ""
         if d.get("quotaKnown"):
             quota = f"{util.human_bytes(d['quotaUsed'])} of {util.human_bytes(d['quotaTotal'])} ({d['quotaPercent']}%)"
@@ -110,7 +127,7 @@ def print_status(state: dict[str, Any]) -> None:
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
             alias = f"{c(BOLD, f['label'])} " if f.get("label") else ""
             print(
-                f"    {c(DIM, '└')} {alias}{f['path'] or '/'} → {f['local']}  {c(col, detail)}  {c(DIM, f['id'])}"
+                f"    {c(DIM, '└')} {alias}{_text(f['path'] or '/')} → {_text(f['local'])}  {c(col, detail)}  {c(DIM, f['id'])}"
             )
             if f.get("attention"):
                 print(c(RED, f"        {f['attention']}"))
@@ -136,17 +153,17 @@ def _run(
     try:
         conn = client.connect()
     except client.DaemonError as e:
-        sys.exit(f"guac: {e}")
+        _fail(f"guac: {e}")
     try:
         reply = conn.request(cmd, args or {}, timeout=timeout)
     except (client.DaemonError, OSError) as e:
-        sys.exit(f"guac: {e}")
+        _fail(f"guac: {e}")
     finally:
         conn.close()
     if not reply.get("ok"):
-        sys.exit(f"guac: {reply.get('error') or 'failed'}")
+        _fail(f"guac: {reply.get('error') or 'failed'}")
     if not quiet and reply.get("message"):
-        print(reply["message"])
+        print(_text(reply["message"]))
     return reply.get("data") or {}
 
 
@@ -154,7 +171,7 @@ def _state() -> dict[str, Any]:
     try:
         conn = client.connect()
     except client.DaemonError as e:
-        sys.exit(f"guac: {e}")
+        _fail(f"guac: {e}")
     try:
         return conn.first_state()
     finally:
@@ -173,7 +190,7 @@ def _find_folder(spec: str) -> str:
                 os.path.abspath(os.path.expanduser(spec)),
             ):
                 return f["id"]
-    sys.exit(f"guac: no folder kept local matches '{spec}' (see `guac status`)")
+    _fail(f"guac: no folder kept local matches '{spec}' (see `guac status`)")
 
 
 def _split_remote(spec: str):
@@ -185,23 +202,23 @@ def _split_remote(spec: str):
 
 def _read_secret(prompt: str) -> str:
     if sys.stdin.isatty():
-        return getpass.getpass(prompt).strip()
+        return getpass.getpass(_text(prompt)).strip()
     return sys.stdin.readline().strip()
 
 
 def print_client_guide(guide: dict[str, Any]) -> None:
-    c = _color(sys.stdout.isatty())
+    c = _escaped_style(sys.stdout.isatty())
     print(c(BOLD, guide["title"]) + c(DIM, f"  (about {guide['minutes']} minutes)"))
-    print(guide["why"])
+    print(_text(guide["why"]))
     for i, step in enumerate(guide["steps"], 1):
-        print(f"\n{c(BOLD, f'{i}. ' + step['title'])}\n   {step['text']}")
+        print(f"\n{c(BOLD, f'{i}. ' + step['title'])}\n   {_text(step['text'])}")
         if step.get("link"):
-            print(f"   {step['link']['label']}: {c(GREEN, step['link']['url'])}")
+            print(f"   {_text(step['link']['label'])}: {c(GREEN, step['link']['url'])}")
         for item in step.get("copy", []):
-            print(f"   {item['label']}: {c(YELLOW, item['value'])}")
+            print(f"   {_text(item['label'])}: {c(YELLOW, item['value'])}")
     if guide.get("signin_note"):
         print(f"\n{c(DIM, 'When signing in: ' + guide['signin_note'])}")
-    print(c(DIM, f"\nrclone's instructions: {guide['docs']}"))
+    print("\n" + c(DIM, f"rclone's instructions: {guide['docs']}"))
 
 
 def _ask_client(guide: dict[str, Any]) -> dict[str, str]:
@@ -211,14 +228,14 @@ def _ask_client(guide: dict[str, Any]) -> dict[str, str]:
 
     def ask(spec: dict[str, Any], secret: bool) -> str:
         while True:
-            prompt = f"{spec['label']}: "
+            prompt = f"{_text(spec['label'])}: "
             value = (getpass.getpass(prompt) if secret else input(prompt)).strip()
             if not value:
                 sys.exit("guac: cancelled")
             if spec.get("reject") and re.search(spec["reject"], value):
-                print(f"  {spec['reject_error']}", file=sys.stderr)
+                print(f"  {_text(spec['reject_error'])}", file=sys.stderr)
             elif not re.search(spec["pattern"], value):
-                print(f"  {spec['error']}", file=sys.stderr)
+                print(f"  {_text(spec['error'])}", file=sys.stderr)
             else:
                 return value
 
@@ -261,7 +278,7 @@ def cmd_service(action: str) -> None:
             time.sleep(1)
         client._systemctl("daemon-reload")
         client._systemctl("enable", "--now", client.UNIT, timeout=60)
-        print(f"Installed and started {unit}")
+        print(f"Installed and started {_text(unit)}")
     elif action == "uninstall":
         client._systemctl("disable", "--now", client.UNIT, timeout=60)
         try:
@@ -273,7 +290,7 @@ def cmd_service(action: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(
+    p = _ArgumentParser(
         prog="guac",
         description="Stream cloud drives and keep chosen folders on this device.",
     )
@@ -449,7 +466,7 @@ def main(argv: list[str] | None = None) -> None:
             try:
                 how = client.start()
             except client.DaemonError as e:
-                sys.exit(f"guac: {e}")
+                _fail(f"guac: {e}")
             print(
                 f"guacd {'is running' if how == 'running' else 'started (' + how + ')'}"
             )
@@ -459,13 +476,13 @@ def main(argv: list[str] | None = None) -> None:
         try:
             sys.exit(daemon.main(verbose=a.verbose))
         except OSError as e:
-            sys.exit(f"guac: {e}")
+            _fail(f"guac: {e}")
 
     if a.cmd == "bridge":
         try:
             client.bridge()
         except (client.DaemonError, OSError) as e:
-            sys.exit(f"guac: {e}")
+            _fail(f"guac: {e}")
         return
 
     if a.cmd == "status":
@@ -478,7 +495,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             running = client.is_running()
         except client.DaemonError as e:
-            sys.exit(f"guac: {e}")
+            _fail(f"guac: {e}")
         if not running:
             print("guacd is not running")
             return
@@ -487,7 +504,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             conn = client.connect()
         except client.DaemonError as e:
-            sys.exit(f"guac: {e}")
+            _fail(f"guac: {e}")
         conn.sock.settimeout(None)
         print(json.dumps(conn.state), flush=True)
         try:
@@ -526,13 +543,13 @@ def main(argv: list[str] | None = None) -> None:
         remote, path = _split_remote(a.spec)
         data = _run("browse", {"remote": remote, "path": path}, quiet=True)
         for d in data.get("dirs", []):
-            print(d["path"] + ("  [kept local]" if d.get("kept") else ""))
+            print(_text(d["path"]) + ("  [kept local]" if d.get("kept") else ""))
     elif a.cmd == "size":
         remote, path = _split_remote(a.spec)
         data = _run(
             "folder_size", {"remote": remote, "path": path, "timeout": 600}, quiet=True
         )
-        print(f"{data['count']} files, {util.human_bytes(data['bytes'])}")
+        print(f"{_text(data['count'])} files, {util.human_bytes(data['bytes'])}")
     elif a.cmd == "client-guide":
         guide = providers.client_guide(a.provider)
         if guide is None:
@@ -606,7 +623,9 @@ def main(argv: list[str] | None = None) -> None:
         if not a.yes:
             try:
                 ok = (
-                    input(f"Remove the account '{a.remote}'? Local copies stay. [y/N] ")
+                    input(
+                        f"Remove the account '{_text(a.remote)}'? Local copies stay. [y/N] "
+                    )
                     .strip()
                     .lower()
                 )
@@ -642,9 +661,9 @@ def main(argv: list[str] | None = None) -> None:
         else:
             source = "its own list" if own else "the global list"
             if fid:
-                print(f"{folder.get('name') or fid} uses {source}:")
+                print(f"{_text(folder.get('name') or fid)} uses {source}:")
             for p in current:
-                print(f"  {p}")
+                print(f"  {_text(p)}")
             return
         args = {"patterns": patterns, "id": fid} if fid else {"patterns": patterns}
         _run("set_excludes", args)
@@ -656,7 +675,7 @@ def main(argv: list[str] | None = None) -> None:
         else:
             settings = _state().get("settings", {})
             if a.key:
-                print(settings.get(a.key))
+                print(_text(settings.get(a.key)))
             else:
                 print(json.dumps(settings, indent=2))
     elif a.cmd == "log":
@@ -664,7 +683,7 @@ def main(argv: list[str] | None = None) -> None:
         for line in _run("log", {"lines": a.lines, "source": source}, quiet=True).get(
             "lines", []
         ):
-            print(line)
+            print(_text(line))
     elif a.cmd == "open":
         state = _state()
         target = (
@@ -691,6 +710,6 @@ def main(argv: list[str] | None = None) -> None:
                 start_new_session=True,
             )
         else:
-            print(target)
+            print(_text(target))
     elif a.cmd == "service":
         cmd_service(a.action)

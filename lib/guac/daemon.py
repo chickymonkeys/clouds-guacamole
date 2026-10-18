@@ -11,6 +11,7 @@ One long-running process per user that:
 
 import asyncio
 import concurrent.futures
+import copy
 import errno
 import fcntl
 import fnmatch
@@ -3619,11 +3620,24 @@ class Daemon:
         }
 
 
+class _SafeLogFormatter(logging.Formatter):
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        # Keep the entire entry header and message on one physical line.
+        return util.neutralize_controls(super().formatMessage(record))
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Tracebacks and stack dumps remain readable. Mark every continuation so
+        # exception text cannot impersonate a new timestamped entry. Work on a
+        # copy: logging caches message/exception text on records shared by handlers.
+        text = super().format(copy.copy(record))
+        return util.neutralize_controls(text, multiline=True).replace("\n", "\n    | ")
+
+
 def _setup_logging(verbose: bool) -> None:
     paths.ensure_private_dir(paths.state_dir())
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    fmt = _SafeLogFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     fh = logging.handlers.RotatingFileHandler(
         paths.daemon_log(), maxBytes=1 << 20, backupCount=1, encoding="utf-8"
     )
@@ -3635,7 +3649,7 @@ def _setup_logging(verbose: bool) -> None:
         pass
     if sys.stderr and (sys.stderr.isatty() or os.environ.get("JOURNAL_STREAM")):
         sh = logging.StreamHandler()
-        sh.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        sh.setFormatter(_SafeLogFormatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(sh)
 
 

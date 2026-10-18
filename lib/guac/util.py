@@ -26,18 +26,29 @@ def die_with_parent():
     return preexec
 
 
-# C0 controls (but tab/newline), DEL and C1 controls: what a terminal would act on
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# Include Unicode line separators and bidi controls: filenames must not forge
+# additional lines or reorder surrounding status and prompts.
+_CONTROL_CHARS_RE = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]"
+)
 
 
-def neutralize_controls(text: str) -> str:
-    """Render control characters visibly; cloud file names can carry raw escape sequences."""
+def neutralize_controls(text: str, *, multiline: bool = False) -> str:
+    """Render untrusted display text visibly, without changing operational paths.
+
+    Only callers displaying a formatted document should allow newlines.
+    C0/C1 controls can execute terminal commands even when output is redirected.
+    """
 
     def picture(m: "re.Match") -> str:
         code = ord(m.group(0))
+        if multiline and code == 0x0A:
+            return m.group(0)
         if code < 0x20:
             return chr(0x2400 + code)
-        return "␡" if code == 0x7F else f"\\x{code:02x}"
+        if code == 0x7F:
+            return "␡"
+        return f"\\x{code:02x}" if code <= 0x9F else f"\\u{code:04x}"
 
     return _CONTROL_CHARS_RE.sub(picture, text or "")
 

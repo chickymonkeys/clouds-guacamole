@@ -345,6 +345,7 @@ CursorSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             text: "Never sync in " + (root.folder.name || "this folder")
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

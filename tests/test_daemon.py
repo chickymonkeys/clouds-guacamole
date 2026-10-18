@@ -745,6 +745,87 @@ def test_validation(sb: Sandbox) -> None:
     assert not reply["ok"], "'..' must be refused"
 
 
+def test_terminal_security(sb: Sandbox) -> None:
+    # Real filesystem -> rclone -> daemon -> CLI, including a terminal stdout.
+    from guac import util
+
+    names = (
+        "OSC\x1b]52;c;ZmFrZQ==\x07",
+        "ST\x1b]52;c;ZmFrZQ==\x1b\\",
+        "C1\x9d52;c;ZmFrZQ==\x9c",
+        "CSI\x1b[2J\x1b[H",
+        "lines\nforged\trow\r\x08\x7f",
+        "bidi\u202ereversed\u202c",
+        "普通 Résumé",
+    )
+    # rclone itself maps local C0/DEL names to control pictures. C1 and bidi
+    # controls reach the daemon unchanged; the remote/mounted contract test in
+    # test_security.py separately covers providers returning raw C0 controls.
+    encoding = {code: chr(0x2400 + code) for code in range(32)}
+    encoding[127] = "␡"
+    remote_names = tuple(name.translate(encoding) for name in names)
+    root = sb.remote_a / "security"
+    root.mkdir()
+    for name in names:
+        (root / name / "child").mkdir(parents=True)
+    try:
+        entries = sb.ok("browse", remote="CloudA", path="security")["dirs"]
+        assert {e["path"] for e in entries} == {
+            f"security/{n}" for n in remote_names
+        }, entries
+        assert {e["name"] for e in entries} == {
+            util.neutralize_controls(n) for n in names
+        }, entries
+        # A path containing controls still addresses the original folder.
+        nested = sb.ok("browse", remote="CloudA", path=f"security/{names[2]}")["dirs"]
+        assert [e["path"] for e in nested] == [f"security/{names[2]}/child"], nested
+        expected = {util.neutralize_controls(f"security/{n}") for n in names}
+        result = guac_cli(sb, "browse", "CloudA:security")
+        assert result.returncode == 0 and set(result.stdout.splitlines()) == expected, (
+            result
+        )
+
+        master, slave = os.openpty()
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO / "bin" / "guac"),
+                    "browse",
+                    "CloudA:security",
+                ],
+                env=sb.env,
+                stdout=slave,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False,
+            )
+        finally:
+            os.close(slave)
+        try:
+            chunks = []
+            while True:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError as e:
+                    if e.errno != 5:  # EIO: all slave descriptors have closed
+                        raise
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            output = b"".join(chunks).decode()
+            assert result.returncode == 0 and set(output.splitlines()) == expected, (
+                result,
+                output,
+            )
+            assert "\x1b" not in output and "\x9d" not in output, repr(output)
+        finally:
+            os.close(master)
+    finally:
+        shutil.rmtree(root)
+
+
 def test_move_roots(sb: Sandbox) -> None:
     sb.ok("stream", remote="CloudA", on=True)
     old_mp = Path(sb.drive("CloudA")["mountPath"])
@@ -863,6 +944,7 @@ SCENARIOS = [
     test_parallel_sync,
     test_remove_folder_keeps_files,
     test_validation,
+    test_terminal_security,
     test_move_roots,
     test_commands,
     test_shutdown_unmounts,

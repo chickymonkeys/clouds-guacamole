@@ -248,6 +248,10 @@ Accounts and credentials stay in rclone's own config (`~/.config/rclone/rclone.c
 
 The CLI and widget authenticate the daemon's user ID using Linux peer credentials before exchanging messages. The widget keeps one Python bridge running for this check and uses private pipes to talk to it. Socket directories must belong to your user and have mode `0700`; symlinks and unsafe parent directories are rejected. If `XDG_RUNTIME_DIR` is absent or its socket paths would be too long, `/tmp/guacamole-<uid>` is used with the same checks. An unsafe existing directory causes an error; Guacamole does not take it over or change its permissions.
 
+Human-readable CLI output renders control characters visibly, including in cloud paths, status, errors, logs and confirmation prompts. A shared folder's name cannot send terminal escape commands such as OSC 52 clipboard writes. Bidirectional text controls and Unicode line separators are also shown explicitly. The original paths stay intact in requests and JSON output, so browsing and syncing still address the actual folders. Guacamole's daemon log keeps each message on one line and marks traceback and stack continuations with `    | `, so untrusted text cannot masquerade as a new log entry. Terminal controls are escaped too; rclone's own log is escaped when read through `guac log`.
+
+Settings, state and filter updates use exclusively created temporary files with mode `0600`, then replace the destination atomically. A pre-existing predictable `.tmp` file or symlink is left alone. Filter files managed through a dotfiles symlink still update the linked target.
+
 ## Development
 
 ```bash
@@ -256,6 +260,7 @@ python3 tests/test_install.py  # local installer lifecycle, ownership checks, re
 tests/test_daemon.py   # end-to-end: real FUSE mounts and bisync on throwaway local remotes
 python3 tests/test_recovery.py  # failure transitions, real local bisync jobs and the widget off-screen
 python3 tests/test_ipc.py  # runtime ownership, daemon authentication, credential non-delivery and widget reconnects
+python3 tests/test_security.py  # hostile terminal text, JSON preservation and atomic-write safety
 ```
 
 The end-to-end suite runs `guacd` against two local rclone `alias` remotes in temporary directories, with its own rclone config. It covers:
@@ -266,7 +271,7 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 - recent files;
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;
-- path and client validation, logs, and clean shutdown.
+- path and client validation, logs, hostile cloud folder names on terminal and redirected output, and clean shutdown.
 
 The recovery suite needs no FUSE mounts. It covers safety-stop Resync and Sync anyway, missing listings, failed and repeated repairs across restart, transient backoff, conflicts from failed jobs, and the existing widget controls and visibility while folder lists are closed. Real-job tests need rclone; the widget check needs Quickshell and `/usr/share/omarchy/shell`. Those sections are reported as skipped if their dependencies are unavailable.
 

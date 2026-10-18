@@ -67,7 +67,17 @@ ShellRoot {
     function() {
       truth(!row().visible, "ordinary synced folders remain collapsed")
       equal(list.group.text, "synced")
-      console.log("RECOVERY_WIDGET_PASS: existing recovery controls, collapsed visibility and state labels")
+      list.open = true
+      list.folders = [Object.assign({}, list.folders[0], {name: "<b>Untrusted folder</b>"})]
+    },
+    function() {
+      row().openFilters()
+    },
+    function() {
+      var caption = find(row(), function(item) { return item.text === "Never sync in <b>Untrusted folder</b>" })
+      truth(caption !== null, "filter editor title loaded")
+      equal(caption.textFormat, Text.PlainText)
+      console.log("RECOVERY_WIDGET_PASS: recovery controls, collapsed visibility, state labels and plain folder titles")
       Qt.quit()
     }
   ]
