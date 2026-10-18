@@ -11,6 +11,7 @@ One long-running process per user that:
 
 import asyncio
 import concurrent.futures
+import copy
 import errno
 import fcntl
 import fnmatch
@@ -3620,9 +3621,16 @@ class Daemon:
 
 
 class _SafeLogFormatter(logging.Formatter):
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        # Keep the entire entry header and message on one physical line.
+        return util.neutralize_controls(super().formatMessage(record))
+
     def format(self, record: logging.LogRecord) -> str:
-        # Escape the formatted result, including exception text, for both handlers.
-        return util.neutralize_controls(super().format(record), multiline=True)
+        # Tracebacks and stack dumps remain readable. Mark every continuation so
+        # exception text cannot impersonate a new timestamped entry. Work on a
+        # copy: logging caches message/exception text on records shared by handlers.
+        text = super().format(copy.copy(record))
+        return util.neutralize_controls(text, multiline=True).replace("\n", "\n    | ")
 
 
 def _setup_logging(verbose: bool) -> None:

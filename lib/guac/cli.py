@@ -37,7 +37,9 @@ class _ArgumentParser(argparse.ArgumentParser):
         super().error(_text(message))
 
 
-def _color(enabled: bool):
+def _escaped_style(enabled: bool):
+    """Escape display text before optionally adding trusted ANSI styling."""
+
     def c(code: str, text: str) -> str:
         text = _text(text)
         return f"{code}{text}{RESET}" if enabled else text
@@ -59,7 +61,7 @@ def _ago(ts: float) -> str:
 
 
 def print_status(state: dict[str, Any]) -> None:
-    c = _color(sys.stdout.isatty())
+    c = _escaped_style(sys.stdout.isatty())
     eng = state.get("engine", {})
     print(
         c(BOLD, "Clouds Guacamole")
@@ -205,7 +207,7 @@ def _read_secret(prompt: str) -> str:
 
 
 def print_client_guide(guide: dict[str, Any]) -> None:
-    c = _color(sys.stdout.isatty())
+    c = _escaped_style(sys.stdout.isatty())
     print(c(BOLD, guide["title"]) + c(DIM, f"  (about {guide['minutes']} minutes)"))
     print(_text(guide["why"]))
     for i, step in enumerate(guide["steps"], 1):

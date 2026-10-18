@@ -19,7 +19,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from guac import cli, client, config, paths, util
-from guac.daemon import Daemon, _SafeLogFormatter
+from guac.daemon import Daemon, _SafeLogFormatter, _setup_logging
 
 # Both OSC forms, CSI, DCS, C0/C1, and visual prompt/line spoofing. All fake data.
 PAYLOADS = (
@@ -30,10 +30,11 @@ PAYLOADS = (
     "shared\x1bPfake\x1b\\",
     "shared\x00\x08\r\x7f",
     "shared\nforged status\trow",
+    "shared\u2028forged entry\u2029another entry",
     "shared\u202ereversed\u202c\u2066hidden\u2069",
 )
 CONTROLS = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]"
 )
 SGR = re.compile(r"\x1b\[(?:0|1|2|31|32|33)m")
 
@@ -46,9 +47,7 @@ class DisplaySecurity(unittest.TestCase):
 
     def test_all_terminal_and_bidi_controls_are_visible(self) -> None:
         controls = "".join(map(chr, (*range(32), *range(127, 160))))
-        bidi = (
-            "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
-        )
+        bidi = "\u061c\u200e\u200f\u2028\u2029\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
         escaped = util.neutralize_controls(controls + bidi)
         self.assertIsNone(CONTROLS.search(escaped))
         self.assertIn("␛", escaped)
@@ -58,6 +57,18 @@ class DisplaySecurity(unittest.TestCase):
             util.neutralize_controls("Résumé/日本語 👩‍💻"), "Résumé/日本語 👩‍💻"
         )
         self.assertEqual(util.neutralize_controls("a\t\nb\r", multiline=True), "a␉\nb␍")
+
+    def test_styled_text_always_escapes_before_adding_color(self) -> None:
+        for enabled in (False, True):
+            render = cli._escaped_style(enabled)
+            for payload in PAYLOADS:
+                with self.subTest(enabled=enabled, payload=payload):
+                    result = render(cli.BOLD, payload)
+                    escaped = util.neutralize_controls(payload)
+                    self.assertEqual(
+                        result, cli.BOLD + escaped + cli.RESET if enabled else escaped
+                    )
+                    self.assert_safe(result, color=enabled)
 
     def test_browse_escapes_paths_on_terminal_and_redirected_output(self) -> None:
         for payload in PAYLOADS:
@@ -241,6 +252,100 @@ class DisplaySecurity(unittest.TestCase):
             self.assert_safe(out.getvalue())
             self.assertIn("Traceback", out.getvalue())
             self.assertIn("ValueError:", out.getvalue())
+            lines = out.getvalue().splitlines()
+            self.assertEqual(
+                lines[0], "ERROR cloud path " + util.neutralize_controls(payload)
+            )
+            self.assertTrue(all(line.startswith("    | ") for line in lines[1:]), lines)
+
+    def test_log_messages_and_metadata_cannot_inject_additional_entries(self) -> None:
+        formatter = _SafeLogFormatter("%(levelname)s %(name)s: %(message)s")
+        for payload in PAYLOADS:
+            record = logging.LogRecord(
+                "guac" + payload,
+                logging.WARNING,
+                __file__,
+                1,
+                "path %s",
+                (payload,),
+                None,
+            )
+            output = formatter.format(record)
+            self.assert_safe(output)
+            self.assertEqual(len(output.splitlines()), 1, repr(output))
+            self.assertIn(util.neutralize_controls(payload), output)
+
+    def test_exception_chains_stacks_and_cached_text_have_marked_continuations(
+        self,
+    ) -> None:
+        payload = "folder\n2026/10/18 INFO guac: forged\x1b]52;c;ZmFrZQ==\x07\u2028more"
+        try:
+            try:
+                raise ValueError(payload)
+            except ValueError as cause:
+                raise RuntimeError(payload) from cause
+        except RuntimeError:
+            record = logging.LogRecord(
+                "guac",
+                logging.ERROR,
+                __file__,
+                1,
+                "failed %s",
+                (payload,),
+                sys.exc_info(),
+                sinfo="Stack (most recent call last):\n" + payload,
+            )
+        original = record.__dict__.copy()
+        formatter = _SafeLogFormatter("%(levelname)s %(message)s")
+        output = formatter.format(record)
+        self.assertEqual(record.__dict__, original)
+        self.assert_safe(output)
+        lines = output.splitlines()
+        self.assertGreater(len(lines), 5)
+        self.assertTrue(all(line.startswith("    | ") for line in lines[1:]), lines)
+        self.assertIn("direct cause", output)
+        self.assertIn("ValueError:", output)
+        self.assertIn("RuntimeError:", output)
+        self.assertIn("Stack (most recent call last)", output)
+        self.assertEqual(formatter.format(record), output)
+        record.exc_text = "Cached traceback\n" + payload
+        cached = formatter.format(record)
+        self.assert_safe(cached)
+        self.assertTrue(
+            all(line.startswith("    | ") for line in cached.splitlines()[1:])
+        )
+
+    def test_production_file_and_stderr_handlers_prevent_log_entry_forgery(
+        self,
+    ) -> None:
+        root_logger = logging.getLogger()
+        original_handlers, original_level = root_logger.handlers[:], root_logger.level
+        root_logger.handlers = []
+        out = io.StringIO()
+        try:
+            with (
+                tempfile.TemporaryDirectory(prefix="guac-logs-") as directory,
+                patch.dict(os.environ, {"XDG_STATE_HOME": directory}),
+                patch.object(out, "isatty", return_value=True),
+                redirect_stderr(out),
+            ):
+                _setup_logging(False)
+                payload = "folder\n2026/10/18 INFO guac: forged\r\x1b]52;c;ZmFrZQ==\x07"
+                record = logging.LogRecord(
+                    "guac", logging.ERROR, __file__, 1, "browse %s", (payload,), None
+                )
+                for handler in root_logger.handlers:
+                    handler.handle(record)
+                    handler.flush()
+                for text in (out.getvalue(), paths.daemon_log().read_text()):
+                    self.assert_safe(text)
+                    self.assertEqual(len(text.splitlines()), 1, repr(text))
+                    self.assertIn(util.neutralize_controls(payload), text)
+        finally:
+            for handler in root_logger.handlers:
+                handler.close()
+            root_logger.handlers = original_handlers
+            root_logger.setLevel(original_level)
 
 
 class AtomicWriteSecurity(unittest.TestCase):

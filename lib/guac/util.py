@@ -26,9 +26,10 @@ def die_with_parent():
     return preexec
 
 
-# Include bidi controls: a filename must not reorder surrounding status or prompts.
+# Include Unicode line separators and bidi controls: filenames must not forge
+# additional lines or reorder surrounding status and prompts.
 _CONTROL_CHARS_RE = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]"
 )
 
 
