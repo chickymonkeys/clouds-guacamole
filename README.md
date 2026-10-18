@@ -246,6 +246,8 @@ guac service install|uninstall
 
 Accounts and credentials stay in rclone's own config (`~/.config/rclone/rclone.conf`). Secrets travel only over the private sockets and through the environment of `rclone authorize`, never on a command line, since every local user can read other processes' arguments.
 
+The CLI and widget authenticate the daemon's user ID using Linux peer credentials before exchanging messages. The widget keeps one Python bridge running for this check and uses private pipes to talk to it. Socket directories must belong to your user and have mode `0700`; symlinks and unsafe parent directories are rejected. If `XDG_RUNTIME_DIR` is absent or its socket paths would be too long, `/tmp/guacamole-<uid>` is used with the same checks. An unsafe existing directory causes an error; Guacamole does not take it over or change its permissions.
+
 ## Development
 
 ```bash
@@ -253,6 +255,7 @@ tests/test_config.py   # settings, provider guides and client checks, path rules
 python3 tests/test_install.py  # local installer lifecycle, ownership checks, retained user data
 tests/test_daemon.py   # end-to-end: real FUSE mounts and bisync on throwaway local remotes
 python3 tests/test_recovery.py  # failure transitions, real local bisync jobs and the widget off-screen
+python3 tests/test_ipc.py  # runtime ownership, daemon authentication, credential non-delivery and widget reconnects
 ```
 
 The end-to-end suite runs `guacd` against two local rclone `alias` remotes in temporary directories, with its own rclone config. It covers:
