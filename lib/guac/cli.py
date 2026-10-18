@@ -294,6 +294,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("-v", "--verbose", action="store_true")
     sub.add_parser("stop", help="Stop guacd (unmounts drives)")
     sub.add_parser("watch", help="Print state updates as JSON lines")
+    sub.add_parser("bridge", help="Authenticated JSON connection for the widget")
 
     s = sub.add_parser("stream", help="Stream (mount) a drive, or stop streaming it")
     s.add_argument("remote")
@@ -455,7 +456,17 @@ def main(argv: list[str] | None = None) -> None:
             return
         from . import daemon
 
-        sys.exit(daemon.main(verbose=a.verbose))
+        try:
+            sys.exit(daemon.main(verbose=a.verbose))
+        except OSError as e:
+            sys.exit(f"guac: {e}")
+
+    if a.cmd == "bridge":
+        try:
+            client.bridge()
+        except (client.DaemonError, OSError) as e:
+            sys.exit(f"guac: {e}")
+        return
 
     if a.cmd == "status":
         state = _state()
@@ -464,12 +475,19 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print_status(state)
     elif a.cmd == "stop":
-        if not client.is_running():
+        try:
+            running = client.is_running()
+        except client.DaemonError as e:
+            sys.exit(f"guac: {e}")
+        if not running:
             print("guacd is not running")
             return
         _run("shutdown")
     elif a.cmd == "watch":
-        conn = client.connect()
+        try:
+            conn = client.connect()
+        except client.DaemonError as e:
+            sys.exit(f"guac: {e}")
         conn.sock.settimeout(None)
         print(json.dumps(conn.state), flush=True)
         try:

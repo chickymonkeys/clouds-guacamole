@@ -12,13 +12,6 @@ Item {
   property string pluginDir: ""
   readonly property string cli: pluginDir + "/bin/guac"
   readonly property string home: String(Quickshell.env("HOME") || "")
-  readonly property string socketPath: {
-    var rt = String(Quickshell.env("XDG_RUNTIME_DIR") || "")
-    var p = rt !== "" ? rt + "/guacamole/daemon.sock" : ""
-    // Mirrors guac/paths.py: unix socket paths are limited to 108 bytes
-    if (p === "" || p.length > 100) return "/tmp/guacamole-" + String(Quickshell.env("UID") || "") + "/daemon.sock"
-    return p
-  }
 
   // ---- daemon state (replaced wholesale on every push)
   property bool connected: false
@@ -90,8 +83,7 @@ Item {
   property var _callbacks: ({})
 
   function request(cmd, args, callback) {
-    var s = sockLoader.item
-    if (!s || !s.connected) {
+    if (!connected || !bridgeProc.running) {
       if (callback) callback(false, null, "The background service isn't running yet", "")
       ensureDaemon()
       return -1
@@ -99,8 +91,7 @@ Item {
     var id = _nextId++
     if (callback) _callbacks[id] = callback
     pendingRequests++
-    s.write(JSON.stringify({ id: id, cmd: cmd, args: args || {} }) + "\n")
-    s.flush()
+    bridgeProc.write(JSON.stringify({ id: id, cmd: cmd, args: args || {} }) + "\n")
     return id
   }
 
@@ -148,7 +139,9 @@ Item {
     } catch (e) {
       return
     }
-    if (msg.type === "state") {
+    if (msg.type === "connected") {
+      _onSocketState(true)
+    } else if (msg.type === "state") {
       _applyState(msg.data || {})
     } else if (msg.type === "reply") {
       pendingRequests = Math.max(0, pendingRequests - 1)
@@ -280,13 +273,12 @@ Item {
 
   // ---- connection management
   //
-  // Quickshell's Socket never retries after a failed connect, so every attempt gets a fresh
-  // Socket (recreated by the Loader), which connects once its signal handlers are attached.
+  // Python authenticates the server's UID before relaying any messages. The widget
+  // uses private pipes, never an unchecked socket path or a UID from the environment.
 
   function connectNow() {
-    if (connected) return
-    sockLoader.active = false
-    sockLoader.active = true
+    if (connected || bridgeProc.running || pluginDir === "") return
+    bridgeProc.running = true
   }
 
   function ensureDaemon() {
@@ -316,22 +308,18 @@ Item {
     reconnectTimer.restart()
   }
 
-  Loader {
-    id: sockLoader
-    active: false
-    sourceComponent: Component {
-      Socket {
-        id: sock
-        path: root.socketPath
-        parser: SplitParser {
-          onRead: function(data) { root._onLine(data) }
-        }
-        onConnectionStateChanged: root._onSocketState(sock.connected)
-        onError: function(error) {
-          if (!sock.connected && !reconnectTimer.running) reconnectTimer.restart()
-        }
-        Component.onCompleted: sock.connected = true
-      }
+  Process {
+    id: bridgeProc
+    command: ["python3", root.cli, "bridge"]
+    stdinEnabled: true
+    stdout: SplitParser {
+      onRead: function(data) { root._onLine(data) }
+    }
+    stderr: StdioCollector { id: bridgeErr }
+    onExited: function(exitCode) {
+      root._onSocketState(false)
+      if (exitCode !== 0 && bridgeErr.text) root.startError = String(bridgeErr.text).trim()
+      if (!reconnectTimer.running) reconnectTimer.restart()
     }
   }
 
@@ -374,4 +362,5 @@ Item {
   }
 
   Component.onCompleted: connectNow()
+  onPluginDirChanged: connectNow()
 }
