@@ -33,6 +33,7 @@ Item {
     var s = service
     if (!s.connected || s.engine.state !== "running" || !s.hasDrives) return s.statusText
     if (s.summary.attention > 0) return s.summary.attention + (s.summary.attention === 1 ? " folder needs you" : " folders need you")
+    if (s.workOffline) return Model.workOfflineText(s.summary)
     if (!s.online) return "Offline"
     if (s.summary.syncing > 0 || s.transfers.count > 0) {
       var t = s.summary.syncing > 0 ? "Syncing" : "Uploading"
@@ -203,6 +204,7 @@ Item {
               color: root.statusColor
               fontFamily: root.fontFamily
               active: root.service.statusState === "online"
+              offline: root.service.workOffline
               busy: root.service.busy
               attention: root.service.attention
               animate: root.animate
@@ -211,15 +213,20 @@ Item {
 
           trailingControl: Component {
             ToggleSwitch {
-              id: allSwitch
+              id: cloudSwitch
+              objectName: "cloudSwitch"
               visible: root.service.hasDrives && root.service.ready
-              checked: root.service.allStreaming
+              checked: root.service.cloudOn
               foreground: hero.foreground
-              onToggled: root.service.streamAll(!root.service.allStreaming)
+              onToggled: root.service.toggleCloud()
 
               PanelToolTip {
-                visible: allSwitch.containsMouse
-                text: root.service.allStreaming ? "Stop streaming every drive (M)" : "Stream every drive (M)"
+                visible: cloudSwitch.containsMouse
+                text: root.service.workOffline
+                      ? "Go back online: drives reconnect and folders catch up (M)"
+                      : root.service.cloudOn
+                        ? "Work offline: disconnect every drive and stop syncing until you turn this back on (M)"
+                        : "Stream every drive (M)"
                 fontFamily: hero.fontFamily
               }
             }
@@ -425,6 +432,7 @@ Item {
           tooltipText: "Sync local folders now (R)"
           foreground: root.dim
           hoverColor: Commons.Color.accent
+          enabled: !root.service.workOffline
           onClicked: root.service.syncNow("")
         }
 

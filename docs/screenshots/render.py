@@ -216,6 +216,23 @@ def scene(name: str):
             ),
             nextcloud,
         ]
+    elif name == "offline":
+        drives = [
+            gdrive(
+                mountState="offline",
+                mounted=False,
+                folders=[
+                    notes(state="offline", localChanges=True),
+                    thesis(state="offline"),
+                ],
+            ),
+            dropbox(
+                mountState="offline",
+                mounted=False,
+                folders=[photos(state="offline", localChanges=True)],
+            ),
+            nextcloud,
+        ]
     elif name == "many":
         # One drive keeping nine folders: its list closes down to the one that needs a look
         kept = [
@@ -275,7 +292,10 @@ def scene(name: str):
         "mountRoot": str(HOME / "Cloud" / "Stream"),
         "localRoot": str(HOME / "Cloud" / "Sync"),
         "cloudRoot": str(HOME / "Cloud"),
-        "settings": {k: config.DEFAULTS[k] for k in config.SETTABLE},
+        "settings": {
+            **{k: config.DEFAULTS[k] for k in config.SETTABLE},
+            "work_offline": name == "offline",
+        },
         "drives": drives,
         "summary": {
             "drives": len(drives),
@@ -283,6 +303,8 @@ def scene(name: str):
             "mounted": sum(1 for d in drives if d["mounted"]),
             "folders": len(folders),
             "syncing": states.count("syncing"),
+            "waitingNetwork": 0,
+            "localChanges": sum(1 for f in folders if f["localChanges"]),
             "attention": sum(
                 1
                 for f in folders
@@ -473,6 +495,7 @@ def render() -> int:
             "QT_QPA_PLATFORM": "offscreen",
             "QT_SCALE_FACTOR": "2",
             "SHOTS": str(OUT),
+            "GUAC_REPO": str(REPO),
         }
     )
     # Quickshell refuses to start without a Wayland socket path it can see

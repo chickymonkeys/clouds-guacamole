@@ -114,7 +114,7 @@ CursorSurface {
           id: glyph
           visible: !root.syncing
           anchors.centerIn: parent
-          text: root.folder.paused ? "󰏤" : "󰉋"
+          text: root.folder.paused ? "󰏤" : (root.state_ === "offline" ? "󰅤" : "󰉋")
           color: root.needsAttention ? Commons.Color.urgent : Qt.darker(root.foreground, 1.35)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -199,7 +199,7 @@ CursorSurface {
           fontSize: Style.font.body
           foreground: root.foreground
           hoverColor: Commons.Color.accent
-          enabled: !root.syncing && !root.folder.paused
+          enabled: !root.syncing && !root.folder.paused && root.state_ !== "offline"
           onClicked: root.service.syncNow(root.folder.id)
         }
 

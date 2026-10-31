@@ -21,7 +21,8 @@ ShellRoot {
 
     G.Service {
       id: svc
-      pluginDir: ""
+      // The widget only talks through bin/guac's authenticated bridge
+      pluginDir: Quickshell.env("GUAC_REPO")
     }
 
     BorderSurface {
@@ -46,7 +47,7 @@ ShellRoot {
       }
     }
 
-    // The bar icon in its four states
+    // The bar icon in its five states
     BorderSurface {
       id: barStates
       y: 1300
@@ -67,7 +68,8 @@ ShellRoot {
           model: [
             { label: "All good", active: true, busy: false, attention: false, color: "#6fa96f" },
             { label: "Files moving", active: true, busy: true, attention: false, color: "#6fa96f" },
-            { label: "Offline or not streaming", active: false, busy: false, attention: false, color: "#c9a24a" },
+            { label: "No network or not streaming", active: false, busy: false, attention: false, color: "#c9a24a" },
+            { label: "Working offline", active: false, offline: true, busy: false, attention: false, color: "#c9a24a" },
             { label: "Needs you", active: false, busy: false, attention: true, color: Commons.Color.urgent }
           ]
 
@@ -80,6 +82,7 @@ ShellRoot {
               iconSize: Style.bar.iconFont
               color: modelData.color
               active: modelData.active
+              offline: modelData.offline === true
               busy: modelData.busy
               attention: modelData.attention
             }
@@ -194,6 +197,11 @@ ShellRoot {
       return true
     })
     shot("conflicts")
+
+    // Working offline: every drive and folder held, and what waits for the switch to go back on
+    step("offline scene", function() { scene("offline"); content.setFoldersOpen("Drive", true) }, 1200)
+    shot("work-offline")
+    step("Drive's list closed again", function() { content.setFoldersOpen("Drive", false) })
 
     // Many folders on one drive: closed down to the one that needs a look, then open
     step("many-folders scene", function() { scene("many") }, 1200)
