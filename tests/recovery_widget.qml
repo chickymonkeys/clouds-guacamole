@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Commons as Commons
 import "gui" as G
 import "gui/Model.js" as Model
 
@@ -20,6 +21,7 @@ ShellRoot {
     },
     function() {
       checkRow(["Resync", "Sync anyway", "Dismiss"])
+      truth(Qt.colorEqual(row().stateColor, Commons.Color.urgent), "what needs you is in the theme's urgent color")
       click("Resync", "resync")
       click("Sync anyway", "force")
       click("Dismiss", "dismiss")

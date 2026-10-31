@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "gui" as G
 
@@ -28,8 +29,8 @@ ShellRoot {
       property real cap: Style.space(620)
       width: Style.space(430)
       height: Math.min(cap, content.preferredHeight + contentTopInset + contentBottomInset)
-      color: Color.popups.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      color: Commons.Color.popups.background
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.popupPadding
       radius: Style.cornerRadius
 
@@ -41,7 +42,7 @@ ShellRoot {
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
         service: svc
-        statusColor: svc.statusState === "error" ? Color.urgent : (svc.statusState === "online" ? "#6fa96f" : "#c9a24a")
+        statusColor: svc.statusState === "error" ? Commons.Color.urgent : (svc.statusState === "online" ? "#6fa96f" : "#c9a24a")
       }
     }
 
@@ -51,8 +52,8 @@ ShellRoot {
       y: 1300
       width: barRow.implicitWidth + padding * 2
       height: barRow.implicitHeight + padding * 2
-      color: Color.bar.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      color: Commons.Color.bar.background
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.popupPadding
       radius: Style.cornerRadius
 
@@ -67,7 +68,7 @@ ShellRoot {
             { label: "All good", active: true, busy: false, attention: false, color: "#6fa96f" },
             { label: "Files moving", active: true, busy: true, attention: false, color: "#6fa96f" },
             { label: "Offline or not streaming", active: false, busy: false, attention: false, color: "#c9a24a" },
-            { label: "Needs you", active: false, busy: false, attention: true, color: Color.urgent }
+            { label: "Needs you", active: false, busy: false, attention: true, color: Commons.Color.urgent }
           ]
 
           Row {
@@ -86,7 +87,7 @@ ShellRoot {
             Text {
               anchors.verticalCenter: parent.verticalCenter
               text: modelData.label
-              color: Qt.darker(Color.bar.text, 1.3)
+              color: Qt.darker(Commons.Color.bar.text, 1.3)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
             }

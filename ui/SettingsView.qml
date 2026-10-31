@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -8,7 +9,7 @@ Item {
   id: root
 
   property var service: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   signal back()
@@ -77,10 +78,10 @@ Item {
     implicitHeight: tileCol.implicitHeight + Style.space(16)
     radius: Style.cornerRadius
     opacity: enabled ? 1 : 0.45
-    color: tileMouse.pressed ? Style.pressedFillFor(root.foreground, Color.accent)
-         : tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent)
-         : tile.active ? Qt.alpha(Color.accent, 0.10) : "transparent"
-    borderSpec: Border.controlSpec(tile.active ? "selected" : (tileMouse.containsMouse ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+    color: tileMouse.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent)
+         : tileMouse.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent)
+         : tile.active ? Qt.alpha(Commons.Color.accent, 0.10) : "transparent"
+    borderSpec: Border.controlSpec(tile.active ? "selected" : (tileMouse.containsMouse ? "hover-cursor" : "normal"), root.foreground, Commons.Color.accent)
 
     Column {
       id: tileCol
@@ -92,7 +93,7 @@ Item {
         text: tile.iconText
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
-        color: tileMouse.containsMouse || tile.active ? Color.accent : root.foreground
+        color: tileMouse.containsMouse || tile.active ? Commons.Color.accent : root.foreground
       }
 
       Text {
@@ -155,7 +156,7 @@ Item {
       implicitHeight: cfgCol.implicitHeight + Style.space(20)
       radius: Style.cornerRadius
       color: Qt.rgba(1, 1, 1, 0.03)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
       ColumnLayout {
         id: cfgCol
@@ -293,7 +294,7 @@ Item {
       implicitHeight: engCol.implicitHeight + Style.space(20)
       radius: Style.cornerRadius
       color: Qt.rgba(1, 1, 1, 0.03)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
       ColumnLayout {
         id: engCol
@@ -313,7 +314,7 @@ Item {
                 : "Background service not connected"
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption - Style.space(1)
-          color: root.service.ready ? Color.accent : Color.urgent
+          color: root.service.ready ? Commons.Color.accent : Commons.Color.urgent
           wrapMode: Text.WordWrap
         }
 
@@ -419,7 +420,7 @@ Item {
             text: Model.filterChangeText(filterEditor.added.length, filterEditor.removed.length, "", false)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption - Style.space(2)
-            color: Color.accent
+            color: Commons.Color.accent
             wrapMode: Text.WordWrap
           }
 

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -28,8 +29,8 @@ CursorSurface {
   readonly property real glyphWidth: Style.space(16)
   readonly property real textIndent: glyphWidth + Style.space(8)
   readonly property color stateColor: {
-    if (needsAttention || state_ === "error") return Color.urgent
-    if (syncing || state_ === "changes" || state_ === "pending") return Color.accent
+    if (needsAttention || state_ === "error") return Commons.Color.urgent
+    if (syncing || state_ === "changes" || state_ === "pending") return Commons.Color.accent
     return dim
   }
   readonly property real progress: {
@@ -114,7 +115,7 @@ CursorSurface {
           visible: !root.syncing
           anchors.centerIn: parent
           text: root.folder.paused ? "󰏤" : "󰉋"
-          color: root.needsAttention ? Color.urgent : Qt.darker(root.foreground, 1.35)
+          color: root.needsAttention ? Commons.Color.urgent : Qt.darker(root.foreground, 1.35)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
@@ -123,7 +124,7 @@ CursorSurface {
           visible: root.syncing
           anchors.centerIn: parent
           text: "󰑐"
-          color: Color.accent
+          color: Commons.Color.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           RotationAnimation on rotation {
@@ -160,7 +161,7 @@ CursorSurface {
       Text {
         visible: root.hasOwnList
         text: "󰈲"
-        color: ownMarkHover.hovered ? Color.accent : root.dim
+        color: ownMarkHover.hovered ? Commons.Color.accent : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
 
@@ -197,7 +198,7 @@ CursorSurface {
           tooltipText: "Sync now"
           fontSize: Style.font.body
           foreground: root.foreground
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
           enabled: !root.syncing && !root.folder.paused
           onClicked: root.service.syncNow(root.folder.id)
         }
@@ -207,7 +208,7 @@ CursorSurface {
           tooltipText: "Open " + Model.tildify(root.folder.local, root.home)
           fontSize: Style.font.body
           foreground: root.foreground
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
           onClicked: root.service.openPath(root.folder.local)
         }
 
@@ -216,7 +217,7 @@ CursorSurface {
           tooltipText: root.folder.paused ? "Resume syncing" : "Pause syncing"
           fontSize: Style.font.body
           foreground: root.foreground
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
           onClicked: root.service.pauseFolder(root.folder.id, !root.folder.paused)
         }
 
@@ -224,8 +225,8 @@ CursorSurface {
           iconText: "󰈲"
           tooltipText: root.filtering ? "Close" : "Files this folder never syncs"
           fontSize: Style.font.body
-          foreground: root.filtering ? Color.accent : root.foreground
-          hoverColor: Color.accent
+          foreground: root.filtering ? Commons.Color.accent : root.foreground
+          hoverColor: Commons.Color.accent
           onClicked: root.filtering ? (root.filtering = false) : root.openFilters()
         }
 
@@ -233,8 +234,8 @@ CursorSurface {
           iconText: "󰏫"
           tooltipText: root.editing ? "Close" : "Rename"
           fontSize: Style.font.body
-          foreground: root.editing ? Color.accent : root.foreground
-          hoverColor: Color.accent
+          foreground: root.editing ? Commons.Color.accent : root.foreground
+          hoverColor: Commons.Color.accent
           onClicked: {
             if (!root.editing) root.resetEditor()
             root.confirmingRemove = false
@@ -247,8 +248,8 @@ CursorSurface {
           iconText: "󰆴"
           tooltipText: "Stop keeping this folder on this device"
           fontSize: Style.font.body
-          foreground: root.confirmingRemove ? Color.urgent : root.dim
-          hoverColor: Color.urgent
+          foreground: root.confirmingRemove ? Commons.Color.urgent : root.dim
+          hoverColor: Commons.Color.urgent
           onClicked: {
             root.editing = false
             root.filtering = false
@@ -273,7 +274,7 @@ CursorSurface {
         implicitHeight: editCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: Qt.rgba(1, 1, 1, 0.04)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
         ColumnLayout {
           id: editCol
@@ -334,7 +335,7 @@ CursorSurface {
         implicitHeight: filterCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: Qt.rgba(1, 1, 1, 0.04)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
         ColumnLayout {
           id: filterCol
@@ -428,7 +429,7 @@ CursorSurface {
                                          root.draftOwn && excludeEditor.result.length === 0)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption - Style.space(2)
-            color: Color.accent
+            color: Commons.Color.accent
             wrapMode: Text.WordWrap
           }
 
@@ -487,7 +488,7 @@ CursorSurface {
           Rectangle {
             height: parent.height
             radius: height / 2
-            color: Color.accent
+            color: Commons.Color.accent
             width: root.progress >= 0 ? parent.width * root.progress : parent.width * 0.3
             x: root.progress >= 0 ? 0 : track.sweep * (parent.width - width)
             Behavior on width { NumberAnimation { duration: 200 } }
@@ -519,7 +520,7 @@ CursorSurface {
         Layout.fillWidth: true
         textFormat: Text.PlainText
         text: root.folder.error || ""
-        color: Qt.darker(Color.urgent, 1.15)
+        color: Qt.darker(Commons.Color.urgent, 1.15)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -533,8 +534,8 @@ CursorSurface {
         Layout.fillWidth: true
         implicitHeight: attCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
-        color: Qt.alpha(Color.urgent, 0.08)
-        borderSpec: Border.controlSpec("normal", Color.urgent, Color.urgent)
+        color: Qt.alpha(Commons.Color.urgent, 0.08)
+        borderSpec: Border.controlSpec("normal", Commons.Color.urgent, Commons.Color.urgent)
 
         ColumnLayout {
           id: attCol
@@ -577,7 +578,7 @@ CursorSurface {
               tooltipText: "Apply the deletions to the other side too"
               fontFamily: root.fontFamily
               fontSize: Style.font.caption
-              foreground: Color.urgent
+              foreground: Commons.Color.urgent
               bordered: true
               onClicked: root.service.resolveFolder(root.folder.id, "force")
             }
@@ -615,7 +616,7 @@ CursorSurface {
           textFormat: Text.PlainText
           text: "󰀦 " + root.folder.conflictCount + (root.folder.conflictCount === 1 ? " conflict" : " conflicts")
                 + ", both versions kept"
-          color: Color.accent
+          color: Commons.Color.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
@@ -661,7 +662,7 @@ CursorSurface {
           Layout.fillWidth: true
           textFormat: Text.PlainText
           text: "Stop syncing " + (root.folder.name || "this folder") + "? The cloud copy is not touched."
-          color: Color.urgent
+          color: Commons.Color.urgent
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
@@ -687,7 +688,7 @@ CursorSurface {
             text: "Stop and trash local copy"
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
-            foreground: Color.urgent
+            foreground: Commons.Color.urgent
             bordered: true
             onClicked: {
               root.confirmingRemove = false

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -11,13 +12,13 @@ Panel {
   ipcTarget: "chickymonkeys.guacamole"
   manageIpc: false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   // The plugin's root folder, wherever it was installed (copy, symlink or git clone)
   readonly property string pluginDir: decodeURIComponent(String(Qt.resolvedUrl("..")).replace(/^file:\/\//, "")).replace(/\/$/, "")
 
-  // The theme has no green or amber, so these muted tones sit next to Color.urgent
+  // The theme has no green or amber, so these muted tones sit next to Commons.Color.urgent
   readonly property color statusColor: service.statusState === "error" ? root.urgent
                                        : (service.statusState === "online" ? "#6fa96f" : "#c9a24a")
 

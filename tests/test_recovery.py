@@ -6,6 +6,7 @@ python3 tests/test_recovery.py
 
 import asyncio
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -446,6 +447,17 @@ class RealBisyncRecovery(RecoverySandbox):
         await self.sync()
         self.assertEqual(self.state()["state"], "synced")
         self.assertEqual(len(list(self.local.glob("*.md"))), 4)
+
+
+class WidgetSource(unittest.TestCase):
+    def test_theme_colors_never_use_the_bare_name(self) -> None:
+        # QtQuick has its own Color singleton since Qt 6.12, which hides the shell's: under a
+        # plain import every theme color is undefined, and the panel loses them silently
+        bare = re.compile(r"(?<![\w.])Color\.[a-z]")
+        files = [*(REPO / "ui").glob("*.qml"), REPO / "docs/screenshots/shots.qml"]
+        for path in files:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                self.assertIsNone(bare.search(line), f"{path.name}:{number}: {line}")
 
 
 @unittest.skipUnless(

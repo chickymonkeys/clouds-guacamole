@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // Cloud glyph: filled when everything requested is healthy, a spinner in front while files move,
 // and a small dot when something needs attention.
@@ -7,7 +8,7 @@ Item {
   id: root
 
   property real iconSize: Style.font.icon
-  property color color: Color.foreground
+  property color color: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property bool active: false
   property bool busy: false
@@ -34,7 +35,7 @@ Item {
     visible: root.busy
     anchors.centerIn: parent
     text: "󰑐"
-    color: Color.accent
+    color: Commons.Color.accent
     font.family: root.fontFamily
     font.pixelSize: root.iconSize * 0.8
     transformOrigin: Item.Center
@@ -52,7 +53,7 @@ Item {
     width: Math.max(4, root.iconSize * 0.32)
     height: width
     radius: width / 2
-    color: Color.urgent
+    color: Commons.Color.urgent
     anchors.right: parent.right
     anchors.top: parent.top
     anchors.rightMargin: -width * 0.15

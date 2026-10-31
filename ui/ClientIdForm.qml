@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Sign an existing drive in again with the user's own OAuth client, after a guided setup of
@@ -12,7 +13,7 @@ Item {
   property var service: null
   property string remote: ""
   property string providerName: ""
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property bool submitted: false
 
@@ -80,8 +81,8 @@ Item {
       Layout.fillWidth: true
       implicitHeight: waitCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
-      color: Qt.alpha(Color.accent, 0.1)
-      borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
+      color: Qt.alpha(Commons.Color.accent, 0.1)
+      borderSpec: Border.controlSpec("focus", root.foreground, Commons.Color.accent)
 
       ColumnLayout {
         id: waitCol
@@ -122,7 +123,7 @@ Item {
             text: "Cancel"
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
-            foreground: Color.urgent
+            foreground: Commons.Color.urgent
             bordered: false
             onClicked: root.service.cancelAuth()
           }
@@ -139,7 +140,7 @@ Item {
       Layout.fillWidth: true
       textFormat: Text.PlainText
       text: message
-      color: Color.urgent
+      color: Commons.Color.urgent
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
       wrapMode: Text.WordWrap

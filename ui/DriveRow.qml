@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -12,7 +13,7 @@ Item {
 
   property var drive: ({})
   property var service: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string home: ""
   property string mountRoot: ""
@@ -53,8 +54,8 @@ Item {
     return parts.join("  ·  ")
   }
   readonly property color subtitleColor: {
-    if (failed) return Color.urgent
-    if (drive.uploads > 0) return Color.accent
+    if (failed) return Commons.Color.urgent
+    if (drive.uploads > 0) return Commons.Color.accent
     if (transitioning || drive.mountState === "waiting") return Qt.darker(foreground, 1.2)
     return dim
   }
@@ -147,7 +148,7 @@ Item {
             width: Math.min(parent.width, Math.max(0, parent.width * (root.drive.quotaPercent || 0) / 100))
             height: parent.height
             radius: height / 2
-            color: root.quotaHigh ? Color.urgent : (root.mounted ? Color.accent : root.dim)
+            color: root.quotaHigh ? Commons.Color.urgent : (root.mounted ? Commons.Color.accent : root.dim)
           }
 
           HoverHandler { id: quotaHover }
@@ -165,7 +166,7 @@ Item {
         iconText: "󰉋"
         tooltipText: "Open " + Model.tildify(root.drive.mountPath, root.home)
         foreground: root.dim
-        hoverColor: Color.accent
+        hoverColor: Commons.Color.accent
         enabled: root.mounted
         opacity: root.mounted ? 1 : 0
         onClicked: root.service.openPath(root.drive.mountPath)
@@ -174,8 +175,8 @@ Item {
       PanelActionButton {
         iconText: "󰇘"
         tooltipText: root.editing ? "Close" : "Rename, move or remove"
-        foreground: root.editing ? Color.accent : root.dim
-        hoverColor: Color.accent
+        foreground: root.editing ? Commons.Color.accent : root.dim
+        hoverColor: Commons.Color.accent
         onClicked: {
           if (!root.editing) root.resetEditor()
           root.confirmingRemove = false
@@ -205,7 +206,7 @@ Item {
       implicitHeight: editCol.implicitHeight + Style.space(20)
       radius: Style.cornerRadius
       color: Qt.rgba(1, 1, 1, 0.04)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
       ColumnLayout {
         id: editCol
@@ -316,7 +317,7 @@ Item {
             text: "Remove drive"
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
-            foreground: Color.urgent
+            foreground: Commons.Color.urgent
             bordered: false
             onClicked: root.confirmingRemove = true
           }
@@ -334,7 +335,7 @@ Item {
             text: "Remove " + (root.drive.label || root.drive.name) + "? Its rclone account is deleted; local copies stay."
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            color: Color.urgent
+            color: Commons.Color.urgent
             wrapMode: Text.WordWrap
           }
 
@@ -347,7 +348,7 @@ Item {
               iconText: "󰆴"
               fontFamily: root.fontFamily
               fontSize: Style.font.caption
-              foreground: Color.urgent
+              foreground: Commons.Color.urgent
               bordered: true
               onClicked: {
                 root.confirmingRemove = false
@@ -375,8 +376,8 @@ Item {
       Layout.fillWidth: true
       implicitHeight: errCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
-      color: Qt.alpha(root.drive.mountState === "waiting" ? root.foreground : Color.urgent, 0.06)
-      borderSpec: Border.controlSpec("normal", root.drive.mountState === "waiting" ? root.foreground : Color.urgent, Color.urgent)
+      color: Qt.alpha(root.drive.mountState === "waiting" ? root.foreground : Commons.Color.urgent, 0.06)
+      borderSpec: Border.controlSpec("normal", root.drive.mountState === "waiting" ? root.foreground : Commons.Color.urgent, Commons.Color.urgent)
 
       ColumnLayout {
         id: errCol
@@ -466,7 +467,7 @@ Item {
           text: "󰀦  " + modelData.text
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
-          color: Qt.lighter(Color.accent, 1.1)
+          color: Qt.lighter(Commons.Color.accent, 1.1)
           wrapMode: Text.WordWrap
         }
 
