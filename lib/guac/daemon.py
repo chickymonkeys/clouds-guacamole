@@ -755,9 +755,12 @@ class Daemon:
             log.warning("could not create %s: %s", self.local_root(), e)
 
     async def reload(self) -> None:
+        was_offline = self.cfg["work_offline"]
         self.cfg = config.load()
         await self.load_remotes()
         self._rebuild_folders()
+        if was_offline and not self.cfg["work_offline"]:
+            self._back_online()
         for name in list(self.drives):
             self._spawn(self.reconcile_drive(name))
         self.mark()
@@ -1051,6 +1054,15 @@ class Daemon:
 
     # ------------------------------------------------------------------ mounts
 
+    def _wants_mount(self, name: str) -> bool:
+        """A drive's own switch is kept while working offline, so exactly the drives that were
+        streaming come back."""
+        return (
+            bool(self.remote_cfg(name).get("stream"))
+            and name in self.remotes
+            and not self.cfg["work_offline"]
+        )
+
     async def reconcile_drive(
         self, name: str, force: bool = False, wait: bool = False
     ) -> None:
@@ -1060,8 +1072,7 @@ class Daemon:
         if d.lock.locked() and not wait:
             return
         async with d.lock:
-            want = bool(self.remote_cfg(name).get("stream")) and name in self.remotes
-            if want:
+            if self._wants_mount(name):
                 target = str(self.desired_mount_point(name))
                 if d.mount_state == "mounted" and d.mount_point != target:
                     try:
@@ -1086,7 +1097,8 @@ class Daemon:
                         await self._unmount(d, force=False)
                     except UserError as e:
                         # Pending uploads or a busy mount: stay mounted and try again shortly
-                        d.error, d.retry_at = str(e), time.time() + 30
+                        d.error, d.error_kind = str(e), e.code
+                        d.retry_at = time.time() + 30
                         self.mark()
                 elif d.mount_state in ("error", "waiting", "foreign"):
                     d.mount_state, d.error, d.error_kind = "off", "", ""
@@ -1375,7 +1387,7 @@ class Daemon:
 
     def _sync_held(self, f: Folder) -> bool:
         """Only the user can start this folder syncing again."""
-        return f.paused
+        return f.paused or self.cfg["work_offline"]
 
     def _folder_blocked(self, f: Folder) -> bool:
         return bool(self._sync_held(f) or f.job_id or f.attention)
@@ -1562,7 +1574,7 @@ class Daemon:
                 if not lost:
                     return
         if f.job_id != job or f.stopping:
-            return  # cancelled meanwhile (removed, or shutting down)
+            return  # cancelled meanwhile (removed, offline, or shutting down)
         if lost or w is None:
             log.warning("sync %s lost its rclone process; retrying", f.id)
             await self._stop_worker(f.id)
@@ -2048,6 +2060,8 @@ class Daemon:
                             int(dc.get("files", 0)),
                         )
                         self.mark()
+                    if d.error_kind == "uploads_pending" and not uploads:
+                        d.retry_at = 0
                     if not d.meta_path:
                         d.meta_path, d.data_path = (
                             str(dc.get("pathMeta", "")),
@@ -2055,9 +2069,7 @@ class Daemon:
                         )
                 except RcError:
                     pass
-            want = (
-                bool(self.remote_cfg(d.name).get("stream")) and d.name in self.remotes
-            )
+            want = self._wants_mount(d.name)
             if (
                 want
                 and d.mount_state in ("off", "waiting", "error")
@@ -2069,6 +2081,7 @@ class Daemon:
             ):
                 self._spawn(self.reconcile_drive(d.name))
 
+        self._stop_syncs_for_offline()
         for f in list(self.folders.values()):
             if f.job_id:
                 await self._poll_job(f)
@@ -2143,7 +2156,7 @@ class Daemon:
                     now - self._recent_at >= RECENT_TTL or self._recent_due
                 ):
                     await self._refresh_recent()
-                if self.online:
+                if self.online and not self.cfg["work_offline"]:
                     await self._refresh_quotas(now)
                 # Read and hashed again only when the file was touched
                 sig = self._filters_signature()
@@ -2328,6 +2341,8 @@ class Daemon:
             state = "syncing"  # also while paused: the sync under way still ends
         elif f.paused:
             state = "paused"
+        elif self.cfg["work_offline"]:
+            state = "offline"
         elif f.attention:
             state = "attention"
         elif f.error and f.error_kind in _WAITING_KINDS:
@@ -2418,7 +2433,11 @@ class Daemon:
                     "glyph": prov["glyph"],
                     "color": prov["color"],
                     "stream": bool(c.get("stream")),
-                    "mountState": d.mount_state,
+                    "mountState": "offline"
+                    if d.mount_state == "off"
+                    and c.get("stream")
+                    and self.cfg["work_offline"]
+                    else d.mount_state,
                     "mounted": d.mount_state == "mounted",
                     "mountPath": str(self.desired_mount_point(name)),
                     "customPath": bool(c.get("mount_path")),
@@ -2682,6 +2701,7 @@ class Daemon:
                         raise UserError(
                             f"{f.local} (kept local) can't be inside the streaming folder"
                         )
+        was_offline = self.cfg["work_offline"]
         old_local = str(self.local_root())
         old_points = {
             name: str(self.desired_mount_point(name))
@@ -2716,15 +2736,25 @@ class Daemon:
                     f.next_due = min(f.next_due, f.last_sync + value * 60)
         elif key.startswith("cache_"):
             message = "Saved; applies the next time each drive is mounted"
+        elif key == "work_offline":
+            message = self._work_offline_changed(was_offline)
         self.mark()
         return {"message": message}
 
     # --- streaming
 
+    def _need_online(self) -> None:
+        if self.cfg["work_offline"]:
+            raise UserError(
+                "Working offline; nothing connects until you go back online"
+            )
+
     async def cmd_stream(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         d = self._drive(args)
         on = bool(args.get("on", True))
+        if on:
+            self._need_online()
         rc = self.remote_cfg(d.name)
         rc["stream"] = on
         self.save_cfg()
@@ -2751,6 +2781,8 @@ class Daemon:
     async def cmd_stream_all(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
         on = bool(args.get("on", True))
+        if on:
+            self._need_online()
         names = list(self.remotes)
         for name in names:
             self.remote_cfg(name)["stream"] = on
@@ -2783,8 +2815,22 @@ class Daemon:
         await self.reconcile_drive(d.name, force=True, wait=True)
         return {"message": d.error or f"{d.name}: {d.mount_state}"}
 
+    async def cmd_unmount_anyway(self, args: dict[str, Any]) -> dict[str, Any]:
+        """For a drive held up on its way offline by open files, or by uploads with no network
+        to finish on. Its own switch stays on, so it comes back with the others, and rclone
+        keeps what didn't upload and sends it from the cache the next time it mounts."""
+        self._need_engine()
+        d = self._drive(args)
+        if not self.cfg["work_offline"]:
+            raise UserError(f"{d.name} isn't on its way offline")
+        async with d.lock:
+            if d.mount_state == "mounted":
+                await self._unmount(d, force=True)
+        return {"message": f"Disconnected {d.name}"}
+
     async def cmd_takeover(self, args: dict[str, Any]) -> dict[str, Any]:
         self._need_engine()
+        self._need_online()
         d = self._drive(args)
         mp = await self.fs(
             _kernel_path, str(self.desired_mount_point(d.name)), timeout=5
@@ -3019,6 +3065,8 @@ class Daemon:
             msg += (
                 " (existing files there are merged; the newer copy of each file wins)"
             )
+        if self.cfg["work_offline"]:
+            msg += ". It first syncs when you go back online"
         return {"id": fid, "local": str(local), "message": msg}
 
     async def cmd_remove_folder(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -3078,7 +3126,7 @@ class Daemon:
         self.save_cfg()
         f.paused = paused
         if paused:
-            # A sync under way is left to finish: a pause is in no hurry
+            # A sync under way is left to finish: unlike going offline, a pause is in no hurry
             f.rerun = False
             self._persist_folder(f)
             message = (
@@ -3091,6 +3139,8 @@ class Daemon:
             self.wake()
             if f.attention:
                 message = f"Resumed {name}; it needs attention first"
+            elif self.cfg["work_offline"]:
+                message = f"Resumed {name}; it syncs when you go back online"
             else:
                 message = f"Resumed {name}; catching up now"
         self.mark()
@@ -3101,6 +3151,71 @@ class Daemon:
         f.retry_at, f.backoff, f.next_due = 0, 0, 0
         f.error = f.error_kind = ""
         self._ensure_watching(f)
+
+    def _catch_up_folders(self) -> int:
+        """Every folder not held back by its own pause. How many are paused."""
+        paused = 0
+        for f in self.folders.values():
+            if f.paused:
+                paused += 1
+            else:
+                self._catch_up(f)
+        self.wake()
+        return paused
+
+    def _stop_syncs_for_offline(self) -> None:
+        """Also runs on every tick, for a sync that was still starting as the switch went off."""
+        if not self.cfg["work_offline"]:
+            return
+        for f in self.folders.values():
+            if f.job_id and not f.stopping:
+                self._spawn(self._stop_sync_for_offline(f))
+
+    async def _stop_sync_for_offline(self, f: Folder) -> None:
+        await self._cancel_sync(f)
+        self._keep_changes_waiting(f)
+        self._persist_folder(f)
+        self.mark()
+        self.wake()  # back online meanwhile: it's free to start again
+
+    def _back_online(self) -> int:
+        """Drives and folders pick up at once, whatever backoff was pending. How many folders
+        stay paused."""
+        for d in self.drives.values():
+            d.retry_at, d.backoff = 0, 0
+            if d.mount_state == "mounted":
+                d.error = d.error_kind = ""  # what held it up on its way out
+            self._spawn(self.reconcile_drive(d.name, force=True))
+        return self._catch_up_folders()
+
+    def _work_offline_changed(self, was_offline: bool) -> str:
+        """Stops everything that reaches the cloud by itself, until turned off. Each folder's
+        own pause and each drive's own switch stay as they are, so exactly what was on comes
+        back and nothing about them is rewritten. A running sync winds down at once, since a
+        switch that says off should mean it and a sync can take minutes, or longer with the
+        network gone. Uploads finish first: only a mounted drive sends them. Streaming stops
+        too: with no network a mount has little left to offer, and fails or hangs on whatever
+        isn't cached."""
+        if self.cfg["work_offline"] == was_offline:
+            return f"Work offline is already {'on' if was_offline else 'off'}"
+        if self.cfg["work_offline"]:
+            log.info("working offline")
+            self._persist_all_folders()  # changes waiting from now on may wait for days
+            for f in self.folders.values():
+                f.rerun = False
+            self._stop_syncs_for_offline()
+            for d in self.drives.values():
+                self._spawn(self.reconcile_drive(d.name, force=True))
+            if any(f.job_id for f in self.folders.values()) or any(
+                d.uploads for d in self.drives.values()
+            ):
+                return "Finishing what's under way, then working offline"
+            return "Working offline; nothing connects until you go back online"
+        log.info("back from working offline")
+        paused = self._back_online()
+        return "Back online; catching up now" + (
+            f" ({paused} paused)" if paused else ""
+        )
 
     async def cmd_set_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
@@ -3157,6 +3272,11 @@ class Daemon:
         targets = (
             [self._folder(args)] if args.get("id") else list(self.folders.values())
         )
+        if self.cfg["work_offline"]:
+            message = "Working offline; nothing syncs until you go back online"
+            if args.get("id"):
+                raise UserError(message)
+            return {"message": message}
         if args.get("id") and targets[0].paused:
             f = targets[0]
             raise UserError(

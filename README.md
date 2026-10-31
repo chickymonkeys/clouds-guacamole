@@ -35,7 +35,7 @@ On a drive card, open **Local folders** and choose **Keep a folder on this devic
 - **Conflicts never lose data.** If a file changed on both sides, the newer copy wins and the other is kept next to it as `name.conflict1.ext`. The folder lists its conflicts and you get a notification.
 - **Safety stop.** If most files disappear on one side (a wiped disk, an unmounted drive, a sync gone wrong), nothing is propagated. The folder asks you to choose between **Resync**, which merges both sides again and never deletes, and **Sync anyway**.
 - **Replaced local files are kept** for 30 days under `~/.local/state/guacamole/backups/` (Settings → Engine → Backups).
-- **Pause a folder to work offline**, or while you change many files and don't want each save uploaded. Nothing syncs and no rclone runs for it until you resume. A sync already under way finishes first. The folder still notices your edits and says _paused, changes waiting_. Resuming runs one ordinary sync at once that brings both sides together, with the same conflict copies and safety stop as any other sync.
+- **Pause a folder** to keep just that one offline, or while you change many files and don't want each save uploaded. Nothing syncs and no rclone runs for it until you resume. A sync already under way finishes first. The folder still notices your edits and says _paused, changes waiting_. Resuming runs one ordinary sync at once that brings both sides together, with the same conflict copies and safety stop as any other sync.
 - **Losing the network needs nothing from you.** A folder that can't reach the cloud says _waiting for network_ and the bar icon turns yellow, not red. It tries again by itself, every 30 seconds to 10 minutes, and soon after the network comes back. _Sync now_ tries at once. Edits made meanwhile stay marked as waiting, also across restarts.
 - Editor temp files, `.DS_Store`, `Thumbs.db`, Obsidian's per-device `workspace.json` and similar files are never synced, either way, and changing them never starts a sync. Edit the list in Settings → Engine → Filters: add or remove patterns (`*.log`, `build/`, `/Exports/**`; each one is explained as you type, and nothing changes until you save), or open `~/.config/guacamole/filters.txt` itself, which stays the source and keeps any rule the widget doesn't manage.
 - **A folder can have its own never-synced list** instead of the global one: hover it, click 󰈲 and choose _Just this folder_ (it starts from a copy of the global list); a 󰈲 next to its name marks it. The folder's list **replaces** the global one, it is not added to it: patterns you later add to the global list don't reach that folder, and neither do any other rules in `filters.txt` (include rules, for instance). Emptying it, or turning it off, goes back to the global list. Whenever the rules a folder syncs with change, its next sync is a safe resync: nothing is deleted, the newer copy wins, and replaced local files still go to the backups. Files newly excluded stay where they are; files no longer excluded are brought over.
@@ -212,7 +212,8 @@ guac stream-all on|off
 guac keep Drive:Documents/Notes [~/Notes]   # keep a folder on this device
 guac unkeep Drive:Documents/Notes [--delete-local]
 guac sync [FOLDER]                      # sync now
-guac pause|resume FOLDER...             # pause to work offline; resume catches up at once
+guac pause|resume FOLDER...             # keep just these offline; resume catches up at once
+guac offline [on|off]                   # drives disconnect, folders stop; off brings back what was on
 guac alias FOLDER "Team notes"          # display name; empty: the folder's own name
 guac exclude [FOLDER] [--add P] [--remove P] [--global]  # never-synced patterns: global, or a folder's own
 guac resolve FOLDER resync|force|dismiss
@@ -269,12 +270,13 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 - streaming and write-through, busy unmount, cleanup of empty mount folders;
 - keeping folders local: syncing in both directions, deletions, conflicts, the safety stop and resync, and folders of one drive syncing in parallel;
 - pausing a folder: no rclone runs while paused, edits on both sides wait, and resuming catches up with one normal sync;
+- working offline: a drive waits for its uploads, then disconnects and keeps its own switch; no rclone runs for any folder, also after a restart; a new folder waits for its first sync; turning it off brings back only the drives that were on, catches up with one normal sync and leaves a paused folder paused;
 - recent files;
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;
 - path and client validation, logs, hostile cloud folder names on terminal and redirected output, and clean shutdown.
 
-The recovery suite needs no FUSE mounts. It covers stopping a sync mid-transfer without losing its listings, also while shutting down, safety-stop Resync and Sync anyway, missing listings, failed and repeated repairs across restart, transient backoff, conflicts from failed jobs, a real HTTP remote losing its connection, keeping deletions and whole files after a transfer is cut, and the widget's controls, theme colors and visibility while folder lists are closed. Real-job tests need rclone; the widget check needs Quickshell and `/usr/share/omarchy/shell`. Those sections are reported as skipped if their dependencies are unavailable.
+The recovery suite needs no FUSE mounts. It covers stopping a sync mid-transfer without losing its listings, also with the network gone or while shutting down, safety-stop Resync and Sync anyway, missing listings, failed and repeated repairs across restart, transient backoff, conflicts from failed jobs, working offline, a real HTTP remote losing its connection, keeping deletions and whole files after a transfer is cut, and the widget's controls, theme colors and visibility while folder lists are closed. Real-job tests need rclone; the widget check needs Quickshell and `/usr/share/omarchy/shell`. Those sections are reported as skipped if their dependencies are unavailable.
 
 The Python code is formatted and checked with [ruff](https://docs.astral.sh/ruff/) and [ty](https://docs.astral.sh/ty/) (`uv tool install ruff ty`; settings in `pyproject.toml`):
 
