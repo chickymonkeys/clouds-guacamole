@@ -37,7 +37,8 @@ Item {
     if (!s.online) return "Offline"
     if (s.summary.syncing > 0 || s.transfers.count > 0) {
       var t = s.summary.syncing > 0 ? "Syncing" : "Uploading"
-      return s.transfers.speed > 0 ? t + " · " + Model.formatSpeed(s.transfers.speed) : t + "…"
+      if (s.transfers.speed > 0) return t + " · " + Model.formatSpeed(s.transfers.speed)
+      return Model.checkingText(s.drives) || t + "…"
     }
     if (s.summary.uploads > 0) return "Uploading " + s.summary.uploads + (s.summary.uploads === 1 ? " file" : " files")
     if (s.summary.waitingNetwork > 0) return "Waiting for the network"

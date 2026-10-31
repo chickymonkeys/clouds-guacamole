@@ -37,7 +37,7 @@ CursorSurface {
     var p = folder.progress || {}
     if (p.totalBytes > 0) return Math.min(1, p.bytes / p.totalBytes)
     if (p.totalTransfers > 0) return Math.min(1, p.transfers / p.totalTransfers)
-    return -1
+    return Model.checkedShare(p)
   }
   readonly property bool hasEdits: editing && labelInput.text.trim() !== String(folder.label || "")
   // Never sync: the global list, or the folder's own list instead (none: the global list)
@@ -505,6 +505,7 @@ CursorSurface {
             if (p.current) parts.push(p.current)
             if (p.totalBytes > 0) parts.push(Model.formatBytes(p.bytes) + " of " + Model.formatBytes(p.totalBytes))
             if (p.speed > 0) parts.push(Model.formatSpeed(p.speed))
+            if (Model.checkedShare(p) >= 0) parts.push("Checking both sides · " + Model.checkedPercent(p))
             return parts.join("  ·  ")
           }
           color: root.dim

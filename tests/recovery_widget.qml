@@ -11,6 +11,16 @@ ShellRoot {
   property var calls: []
   property var checks: [
     function() {
+      equal(Model.checkedShare({checks: 79161, expectedChecks: 158322}), 0.5)
+      equal(Model.checkedShare({checks: 200000, expectedChecks: 158322}), 0.99)
+      equal(Model.checkedPercent({checks: 200000, expectedChecks: 158322}), "99%")
+      equal(Model.checkedShare({checks: 500, expectedChecks: 0}), -1)
+      equal(Model.checkedShare({checks: 0, expectedChecks: 100}), -1)
+      equal(Model.checkedShare({checks: 10, expectedChecks: 100, totalTransfers: 2}), -1)
+      equal(Model.checkedShare(undefined), -1)
+      equal(Model.checkingText([]), "")
+      equal(Model.checkingText([{folders: [{name: "Done", state: "synced",
+                                            progress: {checks: 5, expectedChecks: 10}}]}]), "")
       equal(Model.folderStateText({state: "syncing", resync: true, initialized: true}), "resyncing…")
       equal(Model.folderStateText({state: "syncing", resync: true, initialized: false}), "first sync…")
       equal(Model.folderStateText({state: "syncing", resync: false}), "syncing…")
@@ -124,6 +134,14 @@ ShellRoot {
     function() {
       truth(service.busy, "files moving")
       truth(heroGlyph() === null, "files moving online keep the ordinary cloud")
+      equal(panel.headline, "Syncing…", "no total to measure against yet")
+      panelState(false, 2, {syncing: 2}, {folders: [
+        {id: "s", name: "Small", path: "s", local: "/s", state: "syncing", progress: {checks: 90, expectedChecks: 100}},
+        {id: "b", name: "Big", path: "b", local: "/b", state: "syncing", progress: {checks: 39581, expectedChecks: 158322}}
+      ]})
+    },
+    function() {
+      equal(panel.headline, "Checking Big · 25%")
       panelState(false, 2)
     },
     function() {

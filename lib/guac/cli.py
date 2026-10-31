@@ -131,9 +131,12 @@ def print_status(state: dict[str, Any]) -> None:
                 detail = f"{st}, changes waiting"
             elif st == "waiting" and f.get("errorKind") == "network":
                 detail = "waiting for network"
-            if st == "syncing" and f.get("progress", {}).get("totalTransfers"):
-                p = f["progress"]
+            p = f.get("progress", {})
+            if st == "syncing" and p.get("totalTransfers"):
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
+            elif st == "syncing" and p.get("checks") and p.get("expectedChecks"):
+                percent = min(99, p["checks"] * 100 // p["expectedChecks"])
+                detail = f"checking {percent}%"
             alias = f"{c(BOLD, f['label'])} " if f.get("label") else ""
             print(
                 f"    {c(DIM, '└')} {alias}{_text(f['path'] or '/')} → {_text(f['local'])}  {c(col, detail)}  {c(DIM, f['id'])}"

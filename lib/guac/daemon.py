@@ -160,6 +160,8 @@ class Folder:
     job_id: int = 0
     job_started: float = 0.0
     progress: dict[str, Any] = field(default_factory=dict)
+    # What its last sync had to check: rclone only counts up, with no total to compare to
+    expected_checks: int = 0
     initialized: bool = False
     last_sync: float = 0.0
     last_changes: int = 0
@@ -1322,6 +1324,7 @@ class Daemon:
                     f.initialized = bool(saved.get("initialized"))
                     f.last_sync = float(saved.get("last_sync", 0))
                     f.last_changes = int(saved.get("last_changes", 0))
+                    f.expected_checks = int(saved.get("expected_checks", 0))
                     f.conflicts = list(saved.get("conflicts", []))[:20]
                     f.attention = str(saved.get("attention", ""))
                     f.attention_code = str(saved.get("attention_code", ""))
@@ -1363,6 +1366,7 @@ class Daemon:
             "initialized": f.initialized,
             "last_sync": f.last_sync,
             "last_changes": f.last_changes,
+            "expected_checks": f.expected_checks,
             "conflicts": f.conflicts[:20],
             "attention": f.attention,
             "attention_code": f.attention_code,
@@ -1603,6 +1607,7 @@ class Daemon:
                 "transfers": int(stats.get("transfers", 0)),
                 "totalTransfers": int(stats.get("totalTransfers", 0)),
                 "checks": int(stats.get("checks", 0)),
+                "expectedChecks": f.expected_checks,
                 "current": util.neutralize_controls(
                     os.path.basename(str(current.get("name", "")))
                 ),
@@ -1616,7 +1621,7 @@ class Daemon:
 
     async def _finish_sync(self, f: Folder, js: dict[str, Any]) -> None:
         group = f"guac/{f.id}"
-        changes = 0
+        changes = checks = 0
         w = self.workers.get(f.id)
         try:
             if w is not None:
@@ -1631,6 +1636,7 @@ class Daemon:
                     + int(stats.get("deletes", 0))
                     + int(stats.get("renames", 0))
                 )
+                checks = int(stats.get("checks", 0))
         except RcError:
             pass
         await self._stop_worker(f.id)
@@ -1661,6 +1667,7 @@ class Daemon:
             f.filters_md5 = f.run_filters_md5
             self._check_filters(f)
             f.last_sync, f.last_changes = now, changes
+            f.expected_checks = checks or f.expected_checks
             f.error = f.error_kind = f.attention = f.attention_code = ""
             f.backoff = 0
             f.next_due = now if rerun else now + self.cfg["sync_interval_min"] * 60

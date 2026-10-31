@@ -89,6 +89,32 @@ function folderStateText(f) {
   }
 }
 
+// How far a sync has got comparing both sides, measured against what its last sync had to check.
+// On a big folder that's nearly the whole wait, with nothing moving to show for it. Never quite
+// 1, since only the sync ending says it's done. -1: nothing to tell
+function checkedShare(p) {
+  if (!p || !(p.checks > 0) || !(p.expectedChecks > 0) || p.totalTransfers > 0) return -1
+  return Math.min(0.99, p.checks / p.expectedChecks)
+}
+
+function checkedPercent(p) {
+  return Math.floor(checkedShare(p) * 100) + "%"
+}
+
+// For the header: the folder with the most to check is the one being waited for
+function checkingText(drives) {
+  var slowest = null
+  for (var i = 0; i < (drives || []).length; i++) {
+    var folders = drives[i].folders || []
+    for (var j = 0; j < folders.length; j++) {
+      var f = folders[j]
+      if (f.state !== "syncing" || checkedShare(f.progress) < 0) continue
+      if (!slowest || f.progress.expectedChecks > slowest.progress.expectedChecks) slowest = f
+    }
+  }
+  return slowest ? "Checking " + slowest.name + " · " + checkedPercent(slowest.progress) : ""
+}
+
 // Folders that stay listed while their drive's list is closed: the ones that need a look or a
 // decision. Syncing doesn't count, or rows would come and go every few minutes; a folder you
 // just added shows because adding one opens the list.

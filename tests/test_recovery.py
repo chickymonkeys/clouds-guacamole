@@ -824,6 +824,45 @@ class WorkOffline(OfflineSwitch):
         self.assertEqual(self.f.retry_at, 0, "turned off by hand, it catches up too")
 
 
+class CheckingProgress(OfflineSwitch):
+    """rclone counts checks without a total, so the last sync's count stands in for one."""
+
+    async def poll(self, stats: dict) -> None:
+        self.running_worker()
+        self.f.job_id = 7
+        self.rc_mock.side_effect = [{"finished": False}, stats]
+        await self.d._poll_job(self.f)
+        self.rc_mock.side_effect = None
+
+    async def finish_with(self, stats: dict | Exception, success: bool = True) -> None:
+        self.running_worker()
+        self.f.job_id = 7
+        self.rc_mock.side_effect = [stats]
+        await self.finish({"success": success, "error": "" if success else "boom"})
+        self.rc_mock.side_effect = None
+
+    async def test_a_finished_sync_gives_the_next_one_its_total(self) -> None:
+        await self.finish_with({"checks": 158322})
+        self.assertEqual(self.new_daemon().folders["a"].expected_checks, 158322)
+        await self.poll({"checks": 24612})
+        self.assertEqual(self.f.progress["checks"], 24612)
+        self.assertEqual(self.f.progress["expectedChecks"], 158322)
+
+    async def test_nothing_is_promised_before_the_first_sync_finishes(self) -> None:
+        await self.poll({"checks": 500})
+        self.assertEqual(self.state()["progress"]["expectedChecks"], 0)
+
+    async def test_only_a_finished_sync_changes_the_total(self) -> None:
+        self.f.expected_checks = 158322
+        await self.finish_with({"checks": 12}, success=False)
+        self.assertEqual(self.f.expected_checks, 158322)
+
+    async def test_stats_that_cant_be_read_keep_the_total(self) -> None:
+        self.f.expected_checks = 158322
+        await self.finish_with(RcError("gone"))
+        self.assertEqual(self.f.expected_checks, 158322)
+
+
 class WorkOfflineDrives(OfflineSwitch):
     """Drives on the same switch: each keeps its own, so exactly what was on comes back."""
 
