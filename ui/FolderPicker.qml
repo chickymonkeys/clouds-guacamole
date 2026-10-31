@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -12,7 +13,7 @@ Item {
   property var service: null
   property string remote: ""
   property string driveLabel: remote
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string home: ""
 
@@ -144,7 +145,7 @@ Item {
         iconText: "󰋊"
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
-        foreground: root.path === "" ? Color.accent : root.foreground
+        foreground: root.path === "" ? Commons.Color.accent : root.foreground
         bordered: false
         onClicked: root.navigate("")
       }
@@ -168,7 +169,7 @@ Item {
             text: root.crumbs[index]
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
-            foreground: index === root.crumbs.length - 1 ? Color.accent : root.foreground
+            foreground: index === root.crumbs.length - 1 ? Commons.Color.accent : root.foreground
             bordered: false
             onClicked: root.navigate(root.crumbs.slice(0, index + 1).join("/"))
           }
@@ -182,7 +183,7 @@ Item {
       implicitHeight: Math.min(Style.space(220), Math.max(Style.space(60), listCol.implicitHeight + Style.space(8)))
       radius: Style.cornerRadius
       color: Qt.rgba(1, 1, 1, 0.03)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
       Flickable {
         id: listFlick
@@ -205,7 +206,7 @@ Item {
             padding: Style.space(8)
             textFormat: Text.PlainText
             text: root.loading ? "Loading folders…" : (root.error !== "" ? root.error : "No subfolders here")
-            color: root.error !== "" ? Color.urgent : root.dim
+            color: root.error !== "" ? Commons.Color.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
@@ -238,7 +239,7 @@ Item {
 
                 Text {
                   text: modelData.kept ? "󰋊" : "󰉋"
-                  color: modelData.kept ? Color.accent : Qt.darker(root.foreground, 1.2)
+                  color: modelData.kept ? Commons.Color.accent : Qt.darker(root.foreground, 1.2)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
                 }
@@ -256,14 +257,14 @@ Item {
                 Text {
                   visible: modelData.kept || modelData.containsKept
                   text: modelData.kept ? "on this device" : "has a local folder"
-                  color: Color.accent
+                  color: Commons.Color.accent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption - Style.space(1)
                 }
 
                 Text {
                   text: "󰅂"
-                  color: dirMouse.containsMouse ? Color.accent : root.dim
+                  color: dirMouse.containsMouse ? Commons.Color.accent : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                 }
@@ -289,8 +290,8 @@ Item {
       Layout.fillWidth: true
       implicitHeight: keepCol.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
-      color: Qt.alpha(Color.accent, 0.06)
-      borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
+      color: Qt.alpha(Commons.Color.accent, 0.06)
+      borderSpec: Border.controlSpec("focus", root.foreground, Commons.Color.accent)
 
       ColumnLayout {
         id: keepCol
@@ -325,7 +326,7 @@ Item {
           }
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
-          color: root.keptHere || root.containsKept ? Color.urgent : root.dim
+          color: root.keptHere || root.containsKept ? Commons.Color.urgent : root.dim
           wrapMode: Text.WordWrap
         }
 

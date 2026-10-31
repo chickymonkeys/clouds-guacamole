@@ -114,6 +114,8 @@ class ConfigTests(unittest.TestCase):
         from guac import config
 
         self.assertIs(config.coerce("notifications", "off"), False)
+        self.assertIs(config.DEFAULTS["work_offline"], False)
+        self.assertIs(config.coerce("work_offline", "on"), True)
         self.assertEqual(config.coerce("sync_interval_min", "7"), 7)
         with self.assertRaises(ValueError):
             config.coerce("sync_interval_min", "0")

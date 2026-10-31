@@ -56,6 +56,7 @@ function mountStateText(d) {
     case "mounted": return "streaming"
     case "mounting": return "connecting…"
     case "unmounting": return "disconnecting…"
+    case "offline": return "offline"
     case "waiting": return d.errorKind === "rate" ? "rate-limited" : "waiting for network"
     case "error": return "error"
     case "foreign": return "in use elsewhere"
@@ -75,12 +76,43 @@ function folderStateText(f) {
     case "synced": return "synced " + ago(f.lastSync)
     case "changes": return "changes pending"
     case "pending": return f.resync && f.initialized ? "waiting to resync" : "waiting to sync"
-    case "waiting": return "offline, will sync"
+    case "waiting":
+      if (f.errorKind === "lock") return "waiting for a previous sync"
+      return f.localChanges ? "no network, changes waiting" : "waiting for network"
     case "paused": return f.localChanges ? "paused, changes waiting" : "paused"
+    case "offline":
+      if (f.initialized === false) return "offline, not synced yet"
+      return f.localChanges ? "offline, changes waiting" : "offline"
     case "attention": return "needs attention"
     case "error": return "retrying " + inFuture(f.nextSync)
     default: return f.state || ""
   }
+}
+
+// How far a sync has got comparing both sides, measured against what its last sync had to check.
+// On a big folder that's nearly the whole wait, with nothing moving to show for it. Never quite
+// 1, since only the sync ending says it's done. -1: nothing to tell
+function checkedShare(p) {
+  if (!p || !(p.checks > 0) || !(p.expectedChecks > 0) || p.totalTransfers > 0) return -1
+  return Math.min(0.99, p.checks / p.expectedChecks)
+}
+
+function checkedPercent(p) {
+  return Math.floor(checkedShare(p) * 100) + "%"
+}
+
+// For the header: the folder with the most to check is the one being waited for
+function checkingText(drives) {
+  var slowest = null
+  for (var i = 0; i < (drives || []).length; i++) {
+    var folders = drives[i].folders || []
+    for (var j = 0; j < folders.length; j++) {
+      var f = folders[j]
+      if (f.state !== "syncing" || checkedShare(f.progress) < 0) continue
+      if (!slowest || f.progress.expectedChecks > slowest.progress.expectedChecks) slowest = f
+    }
+  }
+  return slowest ? "Checking " + slowest.name + " · " + checkedPercent(slowest.progress) : ""
 }
 
 // Folders that stay listed while their drive's list is closed: the ones that need a look or a
@@ -94,7 +126,7 @@ function folderStaysListed(f) {
 
 // One phrase for a drive's folders, what the busiest of them is doing, and its tone
 function folderGroup(list) {
-  var attention = 0, retrying = 0, syncing = 0, pending = 0, offline = 0, paused = 0
+  var attention = 0, retrying = 0, syncing = 0, pending = 0, waiting = 0, paused = 0, offline = 0, changed = 0
   for (var i = 0; i < list.length; i++) {
     var f = list[i] || {}
     if (f.attention || f.state === "attention" || (f.conflictCount || 0) > 0) {
@@ -105,17 +137,29 @@ function folderGroup(list) {
     else if (f.state === "paused") paused++
     else if (f.state === "syncing") syncing++
     else if (f.state === "changes" || f.state === "pending") pending++
-    else if (f.state === "waiting") offline++
+    else if (f.state === "waiting") waiting++
+    else if (f.state === "offline") {
+      offline++
+      if (f.localChanges) changed++
+    }
   }
   var busy = syncing > 0
   if (attention > 0) return { text: attention + (attention === 1 ? " needs you" : " need you"), tone: "urgent", busy: busy }
   if (retrying > 0) return { text: retrying + " retrying", tone: "urgent", busy: busy }
   if (syncing > 0) return { text: syncing + " syncing", tone: "accent", busy: busy }
   if (pending > 0) return { text: pending + " waiting to sync", tone: "accent", busy: false }
-  if (offline > 0) return { text: "offline, will sync", tone: "dim", busy: false }
+  if (waiting > 0) return { text: "waiting for network", tone: "dim", busy: false }
+  if (offline > 0) return { text: changed > 0 ? "offline, " + changed + " with changes" : "offline", tone: "dim", busy: false }
   if (paused > 0 && paused === list.length) return { text: "paused", tone: "dim", busy: false }
   if (paused > 0) return { text: "synced, " + paused + " paused", tone: "dim", busy: false }
   return { text: list.length === 1 ? "synced" : "all synced", tone: "dim", busy: false }
+}
+
+// The panel's header while working offline: whether it got there yet, and what waits to sync
+function workOfflineText(summary) {
+  if (summary.syncing > 0 || summary.mounted > 0) return "Finishing up, then offline…"
+  var n = summary.localChanges || 0
+  return n > 0 ? "Working offline · " + n + " with changes" : "Working offline"
 }
 
 function fileGlyph(name) {

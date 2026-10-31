@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -12,7 +13,7 @@ Item {
 
   property var folders: []
   property var service: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string home: ""
   property bool open: false
@@ -99,7 +100,7 @@ Item {
             visible: root.busy
             anchors.centerIn: parent
             text: "󰑐"
-            color: Color.accent
+            color: Commons.Color.accent
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             RotationAnimation on rotation {
@@ -142,7 +143,7 @@ Item {
         Text {
           textFormat: Text.PlainText
           text: root.group.text
-          color: root.group.tone === "urgent" ? Color.urgent : (root.group.tone === "accent" ? Color.accent : root.dim)
+          color: root.group.tone === "urgent" ? Commons.Color.urgent : (root.group.tone === "accent" ? Commons.Color.accent : root.dim)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
@@ -150,7 +151,7 @@ Item {
         Text {
           text: "󰅀"
           rotation: root.open ? 0 : -90
-          color: headerMouse.containsMouse ? Color.accent : Qt.darker(root.foreground, 1.2)
+          color: headerMouse.containsMouse ? Commons.Color.accent : Qt.darker(root.foreground, 1.2)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           Behavior on rotation { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }

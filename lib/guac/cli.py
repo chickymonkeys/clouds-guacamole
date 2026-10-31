@@ -68,7 +68,12 @@ def print_status(state: dict[str, Any]) -> None:
         + c(
             DIM,
             f"  {state.get('version', '')} · {eng.get('version') or 'rclone'}"
-            + ("" if state.get("online") else " · offline"),
+            + ("" if state.get("online") else " · offline")
+            + (
+                " · working offline"
+                if state.get("settings", {}).get("work_offline")
+                else ""
+            ),
         )
     )
     if eng.get("state") != "running":
@@ -87,6 +92,7 @@ def print_status(state: dict[str, Any]) -> None:
         mark = {
             "mounted": c(GREEN, "● streaming"),
             "off": c(DIM, "○ not streaming"),
+            "offline": c(DIM, "○ offline"),
             "mounting": c(YELLOW, "◌ mounting"),
             "unmounting": c(YELLOW, "◌ unmounting"),
             "waiting": c(YELLOW, "◌ waiting"),
@@ -117,20 +123,28 @@ def print_status(state: dict[str, Any]) -> None:
                 "attention": RED,
                 "error": RED,
                 "paused": DIM,
+                "offline": DIM,
                 "waiting": YELLOW,
             }.get(st, "")
             detail = f"synced {_ago(f['lastSync'])}" if st == "synced" else st
-            if st == "paused" and f.get("localChanges"):
-                detail = "paused, changes waiting"
-            if st == "syncing" and f.get("progress", {}).get("totalTransfers"):
-                p = f["progress"]
+            if st in ("paused", "offline") and f.get("localChanges"):
+                detail = f"{st}, changes waiting"
+            elif st == "waiting" and f.get("errorKind") == "network":
+                detail = "waiting for network"
+            p = f.get("progress", {})
+            if st == "syncing" and p.get("totalTransfers"):
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
+            elif st == "syncing" and p.get("checks") and p.get("expectedChecks"):
+                percent = min(99, p["checks"] * 100 // p["expectedChecks"])
+                detail = f"checking {percent}%"
             alias = f"{c(BOLD, f['label'])} " if f.get("label") else ""
             print(
                 f"    {c(DIM, '└')} {alias}{_text(f['path'] or '/')} → {_text(f['local'])}  {c(col, detail)}  {c(DIM, f['id'])}"
             )
             if f.get("attention"):
                 print(c(RED, f"        {f['attention']}"))
+            elif f.get("error") and st == "waiting":
+                print(c(DIM, f"        {f['error']}"))
             elif f.get("error"):
                 print(c(RED, f"        {f['error']}"))
             if f.get("conflictCount"):
@@ -357,11 +371,16 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("sync", help="Sync folders kept local now")
     s.add_argument("folder", nargs="?", default="")
     s = sub.add_parser(
-        "pause", help="Pause syncing folders, to work offline (nothing syncs)"
+        "pause", help="Pause syncing folders, keeping just these offline"
     )
     s.add_argument("folder", nargs="+")
     s = sub.add_parser("resume", help="Resume syncing folders, catching up at once")
     s.add_argument("folder", nargs="+")
+    s = sub.add_parser(
+        "offline",
+        help="Work offline: drives disconnect and folders stop until turned off",
+    )
+    s.add_argument("state", nargs="?", choices=["on", "off"])
     s = sub.add_parser("resolve", help="Act on a folder that needs attention")
     s.add_argument("folder")
     s.add_argument("action", choices=["force", "resync", "dismiss"])
@@ -537,6 +556,12 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd in ("pause", "resume"):
         for fid in [_find_folder(f) for f in a.folder]:
             _run("pause_folder", {"id": fid, "paused": a.cmd == "pause"})
+    elif a.cmd == "offline":
+        if a.state:
+            _run("set_setting", {"key": "work_offline", "value": a.state == "on"})
+        else:
+            on = _state().get("settings", {}).get("work_offline")
+            print(f"Work offline is {'on' if on else 'off'}")
     elif a.cmd == "resolve":
         _run("resolve", {"id": _find_folder(a.folder), "action": a.action})
     elif a.cmd == "browse":

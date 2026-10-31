@@ -27,6 +27,9 @@ DEFAULTS: dict[str, Any] = {
     "cache_min_free_gb": 5,
     # Folders kept local are also synced at this interval (local edits sync within seconds)
     "sync_interval_min": 5,
+    # Nothing reaches the cloud until this is turned off again: drives disconnect and folders
+    # stop syncing, and each keeps its own setting, so exactly what was on comes back
+    "work_offline": False,
     # Desktop notifications for conflicts and problems that need attention
     "notifications": True,
     # Days to keep local files that a sync overwrote or deleted
@@ -42,6 +45,7 @@ SETTABLE = {
     "cache_max_age": str,
     "cache_min_free_gb": int,
     "sync_interval_min": int,
+    "work_offline": bool,
     "notifications": bool,
     "backup_days": int,
 }

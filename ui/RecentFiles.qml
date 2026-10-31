@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -12,7 +13,7 @@ ColumnLayout {
   id: root
 
   property var files: []
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property bool expanded: false
 
@@ -75,7 +76,7 @@ ColumnLayout {
         Layout.alignment: Qt.AlignVCenter
         text: "󰅀"
         rotation: root.expanded ? 0 : -90
-        color: headerMouse.containsMouse ? Color.accent : Qt.darker(root.foreground, 1.2)
+        color: headerMouse.containsMouse ? Commons.Color.accent : Qt.darker(root.foreground, 1.2)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         Behavior on rotation { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
@@ -126,7 +127,7 @@ ColumnLayout {
               text: Model.fileGlyph(fileRow.file.name)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
-              color: Color.accent
+              color: Commons.Color.accent
             }
 
             ColumnLayout {

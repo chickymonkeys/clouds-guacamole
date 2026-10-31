@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // The last lines of guacd's and rclone's logs, newest first, without leaving the panel.
@@ -8,7 +9,7 @@ Item {
   id: root
 
   property var service: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   property string source: "daemon"
@@ -119,7 +120,7 @@ Item {
       implicitHeight: logText.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
       color: Qt.rgba(0, 0, 0, 0.2)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
       TextEdit {
         id: logText
@@ -135,8 +136,8 @@ Item {
               : (root.shown.length > 0 ? root.shown.join("\n") : (root.loading ? "" : "Nothing logged yet."))
         font.family: "monospace"
         font.pixelSize: Style.font.caption - Style.space(2)
-        color: root.error !== "" ? Color.urgent : root.foreground
-        selectionColor: Qt.alpha(Color.accent, 0.4)
+        color: root.error !== "" ? Commons.Color.urgent : root.foreground
+        selectionColor: Qt.alpha(Commons.Color.accent, 0.4)
       }
     }
 

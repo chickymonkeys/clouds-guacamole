@@ -26,7 +26,8 @@ Item {
   property string cloudRoot: home + "/Cloud"
   property var appSettings: ({})
   property var drives: []
-  property var summary: ({ drives: 0, streaming: 0, mounted: 0, folders: 0, syncing: 0, attention: 0, uploads: 0 })
+  property var summary: ({ drives: 0, streaming: 0, mounted: 0, folders: 0, syncing: 0, waitingNetwork: 0, localChanges: 0,
+                           attention: 0, uploads: 0 })
   property var transfers: ({ count: 0, speed: 0, names: [] })
   property var recent: []
   property var auth: ({ busy: false, waiting: false, url: "", error: "", success: "", remote: "" })
@@ -37,14 +38,18 @@ Item {
   property string daemonVersion: ""
 
   readonly property bool ready: connected && engine.state === "running"
+  // Asked for, unlike online: no folder syncs until it is turned off
+  readonly property bool workOffline: appSettings.work_offline === true
+  // The Cloud Drives switch: on while anything is connected. Working offline is its off position
+  readonly property bool cloudOn: !workOffline && (summary.streaming > 0 || summary.folders > 0)
   readonly property bool attention: summary.attention > 0 || (everConnected && !connected)
                                     || (connected && engine.state !== "running" && engine.state !== "starting"
                                         && engine.state !== "restarting")
-  // "online": everything requested is healthy; "offline": nothing or part streaming, or no network;
-  // "error": something needs attention
+  // "online": everything requested is healthy; "offline": nothing or part streaming, no network,
+  // or working offline; "error": something needs attention
   readonly property string statusState: {
     if (attention || actionFailed) return "error"
-    if (!connected || !online) return "offline"
+    if (!connected || !online || workOffline || summary.waitingNetwork > 0) return "offline"
     if (hasDrives && (summary.streaming > 0 || summary.folders > 0) && summary.mounted === summary.streaming) return "online"
     return "offline"
   }
@@ -54,17 +59,18 @@ Item {
     if (engine.state !== "running") return "Starting rclone…"
     if (!hasDrives) return "No drives yet"
     var parts = []
-    if (summary.streaming > 0) parts.push(summary.mounted + "/" + summary.streaming + " streaming")
+    if (workOffline) parts.push("working offline")
+    else if (summary.streaming > 0) parts.push(summary.mounted + "/" + summary.streaming + " streaming")
     else parts.push("not streaming")
     if (summary.folders > 0) parts.push(summary.folders + (summary.folders === 1 ? " folder local" : " folders local"))
     if (summary.syncing > 0) parts.push("syncing")
     else if (summary.uploads > 0) parts.push(summary.uploads + " uploading")
-    if (!online) parts.push("offline")
+    if (!workOffline && !online) parts.push("offline")
+    else if (!workOffline && summary.waitingNetwork > 0) parts.push("waiting for network")
     return parts.join(" · ")
   }
   readonly property bool hasDrives: drives.length > 0
   readonly property bool busy: summary.syncing > 0 || transfers.count > 0 || summary.uploads > 0
-  readonly property bool allStreaming: hasDrives && summary.streaming === drives.length
 
   // ---- transient feedback for the panel's status line
   property string lastAction: ""
@@ -196,6 +202,13 @@ Item {
   function streamAll(on) {
     act("stream_all", { on: on }, on ? "Connecting all drives…" : "Disconnecting all drives…")
   }
+  function unmountAnyway(remote) { act("unmount_anyway", { remote: remote }, "Disconnecting " + remote + "…") }
+  // The Cloud Drives switch. With nothing on to go offline from, it does what it says: stream
+  function toggleCloud() {
+    if (cloudOn) setWorkOffline(true)
+    else if (workOffline) setWorkOffline(false)
+    else streamAll(true)
+  }
   function retryDrive(remote) { act("retry", { remote: remote }, "Retrying " + remote + "…") }
   function takeOver(remote) { act("takeover", { remote: remote }, "Taking over " + remote + "…") }
   function reconnect(remote) { act("reconnect", { remote: remote }, "Opening your browser to sign in…") }
@@ -231,6 +244,7 @@ Item {
     act("remove_folder", { id: id, delete_local: deleteLocal === true }, "Updating…")
   }
   function pauseFolder(id, paused) { act("pause_folder", { id: id, paused: paused }, "") }
+  function setWorkOffline(on) { act("set_setting", { key: "work_offline", value: on }, "") }
   // An empty label shows the folder's own name again
   function setFolder(id, label) { act("set_folder", { id: id, label: label }, "") }
   // Never-synced patterns: the global list without an id, else that folder's own (empty: global)

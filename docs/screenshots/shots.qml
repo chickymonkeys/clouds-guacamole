@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "gui" as G
 
@@ -20,7 +21,8 @@ ShellRoot {
 
     G.Service {
       id: svc
-      pluginDir: ""
+      // The widget only talks through bin/guac's authenticated bridge
+      pluginDir: Quickshell.env("GUAC_REPO")
     }
 
     BorderSurface {
@@ -28,8 +30,8 @@ ShellRoot {
       property real cap: Style.space(620)
       width: Style.space(430)
       height: Math.min(cap, content.preferredHeight + contentTopInset + contentBottomInset)
-      color: Color.popups.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      color: Commons.Color.popups.background
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.popupPadding
       radius: Style.cornerRadius
 
@@ -41,18 +43,18 @@ ShellRoot {
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
         service: svc
-        statusColor: svc.statusState === "error" ? Color.urgent : (svc.statusState === "online" ? "#6fa96f" : "#c9a24a")
+        statusColor: svc.statusState === "error" ? Commons.Color.urgent : (svc.statusState === "online" ? "#6fa96f" : "#c9a24a")
       }
     }
 
-    // The bar icon in its four states
+    // The bar icon in its five states
     BorderSurface {
       id: barStates
       y: 1300
       width: barRow.implicitWidth + padding * 2
       height: barRow.implicitHeight + padding * 2
-      color: Color.bar.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      color: Commons.Color.bar.background
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.popupPadding
       radius: Style.cornerRadius
 
@@ -66,8 +68,9 @@ ShellRoot {
           model: [
             { label: "All good", active: true, busy: false, attention: false, color: "#6fa96f" },
             { label: "Files moving", active: true, busy: true, attention: false, color: "#6fa96f" },
-            { label: "Offline or not streaming", active: false, busy: false, attention: false, color: "#c9a24a" },
-            { label: "Needs you", active: false, busy: false, attention: true, color: Color.urgent }
+            { label: "No network or not streaming", active: false, busy: false, attention: false, color: "#c9a24a" },
+            { label: "Working offline", active: false, offline: true, busy: false, attention: false, color: "#c9a24a" },
+            { label: "Needs you", active: false, busy: false, attention: true, color: Commons.Color.urgent }
           ]
 
           Row {
@@ -79,6 +82,7 @@ ShellRoot {
               iconSize: Style.bar.iconFont
               color: modelData.color
               active: modelData.active
+              offline: modelData.offline === true
               busy: modelData.busy
               attention: modelData.attention
             }
@@ -86,7 +90,7 @@ ShellRoot {
             Text {
               anchors.verticalCenter: parent.verticalCenter
               text: modelData.label
-              color: Qt.darker(Color.bar.text, 1.3)
+              color: Qt.darker(Commons.Color.bar.text, 1.3)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
             }
@@ -193,6 +197,11 @@ ShellRoot {
       return true
     })
     shot("conflicts")
+
+    // Working offline: every drive and folder held, and what waits for the switch to go back on
+    step("offline scene", function() { scene("offline"); content.setFoldersOpen("Drive", true) }, 1200)
+    shot("work-offline")
+    step("Drive's list closed again", function() { content.setFoldersOpen("Drive", false) })
 
     // Many folders on one drive: closed down to the one that needs a look, then open
     step("many-folders scene", function() { scene("many") }, 1200)

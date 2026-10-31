@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -11,8 +12,8 @@ Item {
   id: root
 
   property var service: null
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
   property color statusColor: foreground
   // Whether anyone can see the panel: its spinners stop while it is closed
@@ -32,12 +33,15 @@ Item {
     var s = service
     if (!s.connected || s.engine.state !== "running" || !s.hasDrives) return s.statusText
     if (s.summary.attention > 0) return s.summary.attention + (s.summary.attention === 1 ? " folder needs you" : " folders need you")
+    if (s.workOffline) return Model.workOfflineText(s.summary)
     if (!s.online) return "Offline"
     if (s.summary.syncing > 0 || s.transfers.count > 0) {
       var t = s.summary.syncing > 0 ? "Syncing" : "Uploading"
-      return s.transfers.speed > 0 ? t + " · " + Model.formatSpeed(s.transfers.speed) : t + "…"
+      if (s.transfers.speed > 0) return t + " · " + Model.formatSpeed(s.transfers.speed)
+      return Model.checkingText(s.drives) || t + "…"
     }
     if (s.summary.uploads > 0) return "Uploading " + s.summary.uploads + (s.summary.uploads === 1 ? " file" : " files")
+    if (s.summary.waitingNetwork > 0) return "Waiting for the network"
     if (s.summary.mounted < s.summary.streaming) return "Connecting…"
     if (s.summary.streaming === 0 && s.summary.folders === 0) return "Nothing streaming"
     return "Up to date"
@@ -201,6 +205,7 @@ Item {
               color: root.statusColor
               fontFamily: root.fontFamily
               active: root.service.statusState === "online"
+              offline: root.service.workOffline
               busy: root.service.busy
               attention: root.service.attention
               animate: root.animate
@@ -209,15 +214,20 @@ Item {
 
           trailingControl: Component {
             ToggleSwitch {
-              id: allSwitch
+              id: cloudSwitch
+              objectName: "cloudSwitch"
               visible: root.service.hasDrives && root.service.ready
-              checked: root.service.allStreaming
+              checked: root.service.cloudOn
               foreground: hero.foreground
-              onToggled: root.service.streamAll(!root.service.allStreaming)
+              onToggled: root.service.toggleCloud()
 
               PanelToolTip {
-                visible: allSwitch.containsMouse
-                text: root.service.allStreaming ? "Stop streaming every drive (M)" : "Stream every drive (M)"
+                visible: cloudSwitch.containsMouse
+                text: root.service.workOffline
+                      ? "Go back online: drives reconnect and folders catch up (M)"
+                      : root.service.cloudOn
+                        ? "Work offline: disconnect every drive and stop syncing until you turn this back on (M)"
+                        : "Stream every drive (M)"
                 fontFamily: hero.fontFamily
               }
             }
@@ -365,8 +375,8 @@ Item {
       opacity: Math.max(0, Math.min(1, drivesFlick.contentY / height))
       visible: opacity > 0
       gradient: Gradient {
-        GradientStop { position: 0; color: Color.popups.background }
-        GradientStop { position: 1; color: Qt.alpha(Color.popups.background, 0) }
+        GradientStop { position: 0; color: Commons.Color.popups.background }
+        GradientStop { position: 1; color: Qt.alpha(Commons.Color.popups.background, 0) }
       }
     }
 
@@ -380,8 +390,8 @@ Item {
       opacity: Math.max(0, Math.min(1, (drivesFlick.contentHeight - drivesFlick.height - drivesFlick.contentY) / height))
       visible: opacity > 0
       gradient: Gradient {
-        GradientStop { position: 0; color: Qt.alpha(Color.popups.background, 0) }
-        GradientStop { position: 1; color: Color.popups.background }
+        GradientStop { position: 0; color: Qt.alpha(Commons.Color.popups.background, 0) }
+        GradientStop { position: 1; color: Commons.Color.popups.background }
       }
     }
 
@@ -422,7 +432,8 @@ Item {
           iconText: "󰑐"
           tooltipText: "Sync local folders now (R)"
           foreground: root.dim
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
+          enabled: !root.service.workOffline
           onClicked: root.service.syncNow("")
         }
 
@@ -430,7 +441,7 @@ Item {
           iconText: "󰉋"
           tooltipText: "Open " + Model.tildify(root.service.cloudRoot, root.service.home) + " (O)"
           foreground: root.dim
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
           onClicked: root.service.openPath(root.service.cloudRoot)
         }
 
@@ -438,7 +449,7 @@ Item {
           iconText: "󰒓"
           tooltipText: "Settings (S)"
           foreground: root.dim
-          hoverColor: Color.accent
+          hoverColor: Commons.Color.accent
           onClicked: root.showView("settings")
         }
       }

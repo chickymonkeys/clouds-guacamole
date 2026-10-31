@@ -543,6 +543,147 @@ def test_pause_while_syncing(sb: Sandbox) -> None:
     sb.ok("remove_folder", id=fid)
 
 
+def test_work_offline_roundtrip(sb: Sandbox) -> None:
+    fid = sb._fid
+    local = Path(sb.folder(fid)["local"])
+    cloud = sb.remote_b / "docs"
+    log = sb.tmp / "state" / "guacamole" / "daemon.log"
+    wait(
+        lambda: sb.folder(fid)["state"] == "synced", 30, "settled before going offline"
+    )
+    (sb.remote_b / "kept").mkdir()
+    (sb.remote_b / "kept" / "seed.md").write_text("seed\n")
+    paused = sb.ok("add_folder", remote="CloudB", path="kept")["id"]
+    wait(lambda: sb.folder(paused)["state"] == "synced", 30, "second folder synced")
+    sb.ok("pause_folder", id=paused, paused=True)
+    streamed_b = sb.drive("CloudB")["stream"]
+    sb.ok("stream", remote="CloudB", on=False)
+    sb.ok("stream", remote="CloudA", on=True)
+    mount = Path(sb.drive("CloudA")["mountPath"])
+
+    def since(mark: int) -> str:
+        return log.read_bytes()[mark:].decode(errors="replace")
+
+    try:
+        # Saved just before: inside the 5s write-back, so an upload holds the drive
+        (mount / "last-save.txt").write_text("saved before leaving\n")
+        r = guac_cli(sb, "offline", "on")
+        assert r.returncode == 0 and "offline" in r.stdout, r.stdout + r.stderr
+        assert "is on" in guac_cli(sb, "offline").stdout
+        wait(
+            lambda: (
+                sb.drive("CloudA")["mountState"] == "mounted"
+                and "still uploading" in sb.drive("CloudA")["error"]
+            ),
+            5,
+            "the drive waits for its upload",
+        )
+        wait(lambda: sb.drive("CloudA")["mountState"] == "offline", 15, "disconnected")
+        assert (sb.remote_a / "last-save.txt").exists(), "the upload went first"
+        assert not os.path.ismount(mount) and not sb.drive("CloudA")["error"]
+        assert sb.drive("CloudA")["stream"], "its own switch is kept"
+        assert sb.drive("CloudB")["mountState"] == "off", "this one was off already"
+        f = sb.folder(fid)
+        assert f["state"] == "offline" and not f["paused"], f
+        assert sb.folder(paused)["state"] == "paused", "a folder's own pause shows"
+        mark = log.stat().st_size
+
+        # Edits on both sides, and every way a sync is usually started
+        (local / "one.md").write_text("doc one\nwritten on a plane\n")
+        (local / "plane.md").write_text("new on a plane\n")
+        (cloud / "cloud-side.md").write_text("new in the cloud\n")
+        time.sleep(1.1)
+        assert "offline" in sb.request("sync_now")["message"]
+        r = guac_cli(sb, "sync", fid)
+        assert r.returncode != 0 and "offline" in r.stderr, r.stdout + r.stderr
+        wait(lambda: sb.folder(fid)["localChanges"], 10, "local edits noticed")
+        deadline = time.monotonic() + 10  # well past the 4s debounce after local edits
+        while time.monotonic() < deadline:
+            assert not sync_running(sb, fid), "no rclone runs while working offline"
+            time.sleep(0.2)
+        r = guac_cli(sb, "status")
+        assert "working offline" in r.stdout, r.stdout
+        assert "offline, changes waiting" in r.stdout, r.stdout
+        assert "○ offline" in r.stdout, r.stdout
+
+        # Connecting is refused, and a drive can't be brought back behind the switch's back
+        reply = sb.request("stream", remote="CloudB", on=True)
+        assert not reply["ok"] and "offline" in reply["error"], reply
+        assert not sb.drive("CloudB")["stream"]
+
+        # A folder added now waits too, with nothing downloaded
+        (sb.remote_b / "later").mkdir()
+        (sb.remote_b / "later" / "file.md").write_text("later\n")
+        added = sb.ok("add_folder", remote="CloudB", path="later")
+        assert "go back online" in added["message"], added
+        assert sb.folder(added["id"])["state"] == "offline"
+        time.sleep(1)
+
+        # It all outlives a restart: the switch, and knowing that changes wait
+        sb.stop()
+        sb.start()
+        wait(lambda: sb.folder(fid)["state"] == "offline", 10, "still offline")
+        assert sb.folder(fid)["localChanges"], "changes waiting are not forgotten"
+        assert sb.folder(paused)["state"] == "paused"
+        time.sleep(8)  # past the catch-up every folder gets after a start
+        assert f"sync {fid} (" not in since(mark), since(mark)
+        assert sb.drive("CloudA")["mountState"] == "offline", "no mount after a start"
+        assert not os.path.ismount(mount)
+        assert "written on a plane" not in (cloud / "one.md").read_text()
+        assert not (cloud / "plane.md").exists()
+        assert not (local / "cloud-side.md").exists()
+        assert not (Path(added["local"]) / "file.md").exists()
+    except BaseException:
+        sb.ok("set_setting", key="work_offline", value=False)
+        sb.ok("pause_folder", id=paused, paused=False)
+        sb.ok("stream", remote="CloudA", on=False, force=True)
+        sb.ok("stream", remote="CloudB", on=streamed_b)
+        raise
+
+    # Turned off: one ordinary bisync brings both sides together, and the pause stays
+    mark = log.stat().st_size
+    r = guac_cli(sb, "offline", "off")
+    assert r.returncode == 0 and "catching up" in r.stdout, r.stdout + r.stderr
+    assert "1 paused" in r.stdout, r.stdout
+    try:
+        wait(lambda: sb.drive("CloudA")["mounted"], 15, "the drive that was on is back")
+        assert (mount / "last-save.txt").read_text() == "saved before leaving\n"
+        assert sb.drive("CloudB")["mountState"] == "off", (
+            "the one that was off stays off"
+        )
+        wait(lambda: f"sync {fid} done" in since(mark), 30, "catch-up sync")
+        wait(lambda: (Path(added["local"]) / "file.md").exists(), 30, "first download")
+        text = since(mark)
+        catchup = text[: text.index(f"sync {fid} done")]
+        # The new folder's first sync is a resync, as every first sync is
+        starts = [l for l in catchup.splitlines() if f"sync {fid} (" in l]
+        assert len(starts) == 1, catchup
+        assert "[resync]" not in starts[0], "catching up is a normal sync"
+        assert (cloud / "one.md").read_text() == "doc one\nwritten on a plane\n"
+        assert (cloud / "plane.md").read_text() == "new on a plane\n"
+        assert (local / "cloud-side.md").read_text() == "new in the cloud\n"
+        assert sb.folder(paused)["state"] == "paused", "turning it off is not a resume"
+        assert f"sync {paused} (" not in since(mark), since(mark)
+        wait(lambda: sb.folder(fid)["state"] == "synced", 40, "settled after catch-up")
+        settle(sb, fid)
+
+        # A quick trip changes nothing, so a folder just synced isn't listed all over again
+        mark = log.stat().st_size
+        sb.ok("set_setting", key="work_offline", value=True)
+        wait(lambda: not sb.drive("CloudA")["mounted"], 15, "offline again")
+        sb.ok("set_setting", key="work_offline", value=False)
+        wait(lambda: sb.drive("CloudA")["mounted"], 15, "back again")
+        time.sleep(2)
+        assert f"sync {fid} (" not in since(mark), since(mark)
+        assert sb.folder(fid)["state"] == "synced"
+    finally:
+        # Left behind, they would take sync slots from the scenarios after this one
+        sb.ok("remove_folder", id=paused)
+        sb.ok("remove_folder", id=added["id"])
+        sb.ok("stream", remote="CloudA", on=False, force=True)
+        sb.ok("stream", remote="CloudB", on=streamed_b)
+
+
 def test_conflict(sb: Sandbox) -> None:
     fid = sb._fid
     local = Path(sb.folder(fid)["local"])
@@ -936,6 +1077,7 @@ SCENARIOS = [
     test_excludes,
     test_paused_roundtrip,
     test_pause_while_syncing,
+    test_work_offline_roundtrip,
     test_conflict,
     test_safety_stop,
     test_recent,

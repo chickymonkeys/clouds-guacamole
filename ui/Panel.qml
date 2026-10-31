@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -11,13 +12,13 @@ Panel {
   ipcTarget: "chickymonkeys.guacamole"
   manageIpc: false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   // The plugin's root folder, wherever it was installed (copy, symlink or git clone)
   readonly property string pluginDir: decodeURIComponent(String(Qt.resolvedUrl("..")).replace(/^file:\/\//, "")).replace(/\/$/, "")
 
-  // The theme has no green or amber, so these muted tones sit next to Color.urgent
+  // The theme has no green or amber, so these muted tones sit next to Commons.Color.urgent
   readonly property color statusColor: service.statusState === "error" ? root.urgent
                                        : (service.statusState === "online" ? "#6fa96f" : "#c9a24a")
 
@@ -61,6 +62,7 @@ Panel {
     }
     function syncAll(): string { service.syncNow(""); return "ok" }
     function streamAll(): string { service.streamAll(true); return "ok" }
+    function workOffline(on: bool): string { service.setWorkOffline(on); return "ok" }
     function status(): string {
       return JSON.stringify({ connected: service.connected, summary: service.summary, text: service.statusText })
     }
@@ -82,6 +84,7 @@ Panel {
           color: root.statusColor
           fontFamily: root.fontFamily
           active: service.statusState === "online"
+          offline: service.workOffline
           busy: service.busy
           attention: service.attention
         }
@@ -90,7 +93,7 @@ Panel {
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) service.syncNow("")
-      else if (buttonCode === Qt.MiddleButton) service.streamAll(!service.allStreaming)
+      else if (buttonCode === Qt.MiddleButton) service.toggleCloud()
       else root.toggle()
     }
   }
@@ -121,7 +124,7 @@ Panel {
         if (k === "a") content.showView("add")
         else if (k === "s") content.showView("settings")
         else if (k === "r") service.syncNow("")
-        else if (k === "m") service.streamAll(!service.allStreaming)
+        else if (k === "m") service.toggleCloud()
         else if (k === "o") service.openPath(service.cloudRoot)
       }
 

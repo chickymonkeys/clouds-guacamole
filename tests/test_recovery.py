@@ -6,7 +6,10 @@ python3 tests/test_recovery.py
 
 import asyncio
 import os
+import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,7 +23,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from guac import config, filters, paths, providers
-from guac.daemon import Daemon, Folder, UserError
+from guac.daemon import Daemon, Drive, Folder, SyncWorker, UserError
+from guac.rc import RcError
 
 REPO = Path(__file__).resolve().parents[1]
 OMARCHY_SHELL = Path("/usr/share/omarchy/shell")
@@ -30,6 +34,10 @@ BROKEN = (
     "ERROR : Bisync aborted. Must run --resync to recover."
 )
 CONFLICT = "NOTICE: - Path1 Renaming Path1 copy - Cloud:docs/one.conflict1.md\n"
+UNREACHABLE = (
+    'Bisync critical error: couldn\'t list files: Propfind "http://cloud/": '
+    "dial tcp 127.0.0.1:1: connect: connection refused"
+)
 
 
 class RecoverySandbox(unittest.IsolatedAsyncioTestCase):
@@ -107,7 +115,7 @@ class RecoverySandbox(unittest.IsolatedAsyncioTestCase):
         return {"success": False, "error": error, "output": {"output": output}}
 
 
-class FailureTransitions(RecoverySandbox):
+class MockedJobs(RecoverySandbox):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         self.rc_mock = AsyncMock(return_value={"jobid": 1})
@@ -122,6 +130,8 @@ class FailureTransitions(RecoverySandbox):
     async def finish(self, result: dict) -> None:
         await self.d._finish_sync(self.f, result)
 
+
+class FailureTransitions(MockedJobs):
     async def test_safety_stop_resync_and_force_are_distinct(self) -> None:
         for message, code in (
             ("Safety abort: too many deletes. Run with --force", "safety"),
@@ -269,6 +279,7 @@ class FailureTransitions(RecoverySandbox):
             ("googleapi: Error 403: Quota exceeded (rateLimitExceeded)", "rate", 120),
         ):
             with self.subTest(kind=kind):
+                self.d.online = True
                 self.f.resync_reason = "recover"
                 self.f.backoff = 0
                 await self.start()
@@ -344,14 +355,683 @@ class FailureTransitions(RecoverySandbox):
 
     async def test_resync_clears_unconsumed_force_and_network_wait(self) -> None:
         self.f.force_next = True
-        self.f.waiting_network = True
+        self.f.error = "dial tcp: connection refused"
         self.f.error_kind = "network"
         await self.d.cmd_resolve({"id": "a", "action": "resync"})
-        self.assertFalse(self.f.waiting_network)
+        self.assertFalse(self.f.error)
         self.assertFalse(self.f.error_kind)
         params = await self.start()
         self.assertTrue(params["resync"])
         self.assertNotIn("force", params)
+
+
+class SchedulerJobs(MockedJobs):
+    async def lose_network(self) -> None:
+        await self.start()
+        await self.finish(self.failed_job(UNREACHABLE))
+
+    async def scheduler_pass(self) -> AsyncMock:
+        """One round of the scheduler, recording what it starts instead of starting it."""
+        started = AsyncMock(return_value=True)
+        self.d._start_sync = started
+        self.d.engine_state = "running"
+        await self.d._start_due_folders()
+        return started
+
+
+class SyncHandling(SchedulerJobs):
+    """What a folder does when syncing can't happen, and what it tells you meanwhile."""
+
+    async def test_network_failure_waits_without_asking_for_attention(self) -> None:
+        await self.lose_network()
+        self.assertEqual(self.state()["state"], "waiting")
+        summary = self.d.build_state()["summary"]
+        self.assertEqual(summary["attention"], 0, "nothing here needs the user")
+        self.assertEqual(summary["waitingNetwork"], 1)
+        self.assertFalse(self.d._folder_due(self.f, time.time()))
+        self.assertTrue(self.d._folder_due(self.f, self.f.retry_at + 1))
+        # Still waiting, not "synced", between the retry time and the retry finishing
+        self.f.retry_at = time.time() - 1
+        self.assertEqual(self.state()["state"], "waiting")
+
+    async def test_stale_lock_waits_without_asking_for_attention(self) -> None:
+        await self.start()
+        await self.finish(self.failed_job("prior lock file found"))
+        self.assertEqual(self.state()["state"], "waiting")
+        self.assertEqual(self.state()["errorKind"], "lock")
+        summary = self.d.build_state()["summary"]
+        self.assertEqual(summary["attention"], 0)
+        self.assertEqual(summary["waitingNetwork"], 0, "the network is fine")
+
+    async def test_failures_with_something_to_do_still_show(self) -> None:
+        for error, kind in (
+            ("googleapi: Error 403: Quota exceeded (rateLimitExceeded)", "rate"),
+            ("Failed to copy: no space left on device", "other"),
+        ):
+            with self.subTest(kind=kind):
+                await self.start()
+                await self.finish(self.failed_job(error))
+                self.assertEqual(self.state()["state"], "error")
+                self.assertEqual(self.d.build_state()["summary"]["attention"], 1)
+
+    async def test_wrong_route_check_cannot_stall_a_folder(self) -> None:
+        # VPN and policy-routing setups have no default route in the main table: the route
+        # stays "down" forever, so a network failure must keep being retried on its own
+        self.d.online = False
+        await self.lose_network()
+        self.assertTrue(self.d._folder_due(self.f, self.f.retry_at + 1))
+        self.f.retry_at = self.f.next_due = 0
+        started = await self.scheduler_pass()
+        started.assert_awaited_once_with(self.f)
+
+    async def test_a_retry_happens_when_it_says_it_does(self) -> None:
+        # Started by a local edit, so the timer is minutes away
+        self.f.next_due = time.time() + 3600
+        await self.lose_network()
+        self.assertLess(self.f.next_due, time.time() + 60)
+        self.assertTrue(self.d._folder_due(self.f, self.f.retry_at + 1))
+        self.assertEqual(self.state()["nextSync"], int(self.f.retry_at))
+
+    async def test_lost_connection_is_not_repaired_with_a_resync(self) -> None:
+        # bisync sets the listings aside here, and --recover puts them back on the next run;
+        # a resync would bring back whatever was deleted since the last sync
+        for cause in (
+            "unchunked simple update failed: dial tcp: connection refused",
+            "googleapi: Error 403: Quota exceeded (rateLimitExceeded)",
+        ):
+            with self.subTest(cause=cause):
+                await self.start()
+                await self.finish(
+                    self.failed_job(
+                        f"Bisync critical error: {cause}\n"
+                        "Bisync aborted. Must run --resync to recover."
+                    )
+                )
+                self.assertEqual(self.f.resync_reason, "")
+                self.assertNotIn("resync", await self.start())
+                await self.finish({"success": True})
+
+    async def test_missing_backups_still_repair_after_the_retry(self) -> None:
+        await self.lose_network()
+        await self.start()
+        await self.finish(self.failed_job(BROKEN))
+        self.assertEqual(self.f.resync_reason, "recover")
+        self.assertFalse(self.f.attention)
+
+    async def test_why_a_folder_waits_outlives_a_restart(self) -> None:
+        await self.lose_network()
+        restored = self.new_daemon()
+        f = restored.folders["a"]
+        self.assertEqual(restored._folder_state(f, time.time())["state"], "waiting")
+
+    async def test_sync_now_retries_a_waiting_folder_at_once(self) -> None:
+        self.d.online = False
+        await self.lose_network()
+        await self.d.cmd_sync_now({"id": "a"})
+        self.assertFalse(self.f.error_kind)
+        started = await self.scheduler_pass()
+        started.assert_awaited_once_with(self.f)
+
+    async def test_no_route_retries_rarely_until_it_comes_back(self) -> None:
+        self.d.online = False
+        await self.lose_network()
+        self.assertEqual(self.f.backoff, 600)
+        self.assertEqual(self.d._folder_due_at(self.f, 0.0), self.f.retry_at)
+        with patch("guac.daemon.util.has_default_route", return_value=True):
+            self.d.engine_state = "stopped"
+            await self.d._tick()
+        self.assertTrue(self.d.online)
+        self.assertLessEqual(self.f.retry_at, time.time() + 10)
+        self.assertEqual(self.f.backoff, 0)
+
+    async def test_scheduler_sleeps_through_folders_that_cannot_run(self) -> None:
+        self.f.next_due = 0
+        del self.d.remotes["Cloud"]
+        self.assertGreater(self.d._scheduler_sleep(time.time()), 1.0)
+
+    async def test_failed_sync_keeps_changes_waiting(self) -> None:
+        self.d._mark_folder_dirty(self.f, time.time())
+        self.assertTrue(self.state()["localChanges"])
+        await self.start()
+        self.assertFalse(self.state()["localChanges"], "they are on their way")
+        await self.finish(self.failed_job(UNREACHABLE))
+        self.assertTrue(self.state()["localChanges"], "they did not get there")
+        self.assertFalse(self.d._folder_due(self.f, time.time()), "backoff still rules")
+        self.f.retry_at = 0
+        await self.start()
+        await self.finish({"success": True})
+        self.assertFalse(self.state()["localChanges"])
+
+    async def test_changes_seen_during_a_failed_sync_are_kept(self) -> None:
+        await self.start()
+        self.d._mark_folder_dirty(self.f, time.time())
+        await self.finish(self.failed_job(UNREACHABLE))
+        self.assertTrue(self.f.dirty_since)
+
+    async def test_lost_worker_backs_off_and_says_so_when_it_repeats(self) -> None:
+        delays = []
+        for _ in range(4):
+            await self.start()
+            self.d.workers.pop("a", None)
+            await self.d._poll_job(self.f)
+            self.assertFalse(self.f.job_id)
+            delays.append(self.f.backoff)
+        self.assertEqual(delays, [5, 10, 20, 40])
+        self.assertEqual(self.state()["state"], "error")
+        self.assertIn("rclone", self.f.error)
+        self.f.retry_at = 0
+        await self.start()
+        await self.finish({"success": True})
+        self.assertEqual((self.f.backoff, self.f.error), (0, ""))
+
+    async def test_one_lost_worker_is_not_worth_showing(self) -> None:
+        await self.start()
+        await self.d._poll_job(self.f)
+        self.assertEqual(self.f.backoff, 5)
+        self.assertEqual(self.f.error, "")
+
+    async def test_lost_worker_keeps_changes_waiting(self) -> None:
+        self.d._mark_folder_dirty(self.f, time.time())
+        await self.start()
+        await self.d._poll_job(self.f)
+        self.assertTrue(self.state()["localChanges"])
+
+    async def test_restored_local_folder_is_watched_again(self) -> None:
+        watch = self.d._watch_folder = Mock()
+        self.f.watching = False
+        self.d._folder_attention(self.f, "missing_local", "Restore it")
+        await self.d.cmd_resolve({"id": "a", "action": "resync"})
+        await self.start()
+        await self.finish({"success": True})
+        watch.assert_called_once_with(self.f)
+
+    async def test_watching_folder_is_left_alone(self) -> None:
+        watch = self.d._watch_folder = Mock()
+        self.f.watching = True
+        await self.start()
+        await self.finish({"success": True})
+        watch.assert_not_called()
+
+    async def test_sync_now_is_honest_about_a_folder_it_cannot_sync(self) -> None:
+        self.d._folder_attention(self.f, "safety", "Check both copies")
+        with self.assertRaisesRegex(UserError, "needs attention"):
+            await self.d.cmd_sync_now({"id": "a"})
+        reply = await self.d.cmd_sync_now({})
+        self.assertIn("needs attention", reply["message"])
+        self.assertNotIn("Syncing now", reply["message"])
+
+    async def test_sync_all_counts_what_it_skipped(self) -> None:
+        other = Folder("b", "Cloud", "other", str(self.root / "other"))
+        self.d.folders[other.id] = other
+        other.paused = True
+        third = Folder("c", "Cloud", "third", str(self.root / "third"))
+        self.d.folders[third.id] = third
+        self.d._folder_attention(third, "safety", "Check both copies")
+        reply = await self.d.cmd_sync_now({})
+        self.assertEqual(reply["message"], "Syncing now (1 paused, 1 needs attention)")
+
+
+class OfflineSwitch(SchedulerJobs):
+    async def switch(self, on: bool) -> str:
+        reply = await self.d.cmd_set_setting({"key": "work_offline", "value": on})
+        return reply["message"]
+
+    async def settle(self) -> None:
+        for _ in range(100):
+            if not self.d._tasks:
+                return
+            await asyncio.sleep(0.01)
+        self.fail("what the switch started never finished")
+
+    def running_worker(self) -> Mock:
+        """The sync's own rclone, as far as stopping it goes."""
+        proc = Mock(returncode=None, wait=AsyncMock(return_value=0))
+        self.d.workers["a"] = SyncWorker(proc, Mock())
+        return proc
+
+
+class WorkOffline(OfflineSwitch):
+    """Folders on the one switch: no rclone at all until it is turned off."""
+
+    async def test_no_folder_starts_and_each_says_so(self) -> None:
+        await self.switch(True)
+        self.f.next_due = 0
+        self.d._mark_folder_dirty(self.f, time.time() - 60)
+        self.assertEqual(self.state()["state"], "offline")
+        self.assertTrue(self.state()["localChanges"])
+        self.assertFalse(self.d._folder_due(self.f, time.time()))
+        self.assertEqual(self.d._folder_due_at(self.f, time.time()), float("inf"))
+        (await self.scheduler_pass()).assert_not_awaited()
+
+    async def test_every_way_a_sync_starts_stays_stopped(self) -> None:
+        await self.switch(True)
+        with self.assertRaisesRegex(UserError, "offline"):
+            await self.d.cmd_sync_now({"id": "a"})
+        self.assertIn("offline", (await self.d.cmd_sync_now({}))["message"])
+        self.d._on_resume()
+        self.f.resync_reason = "manual"
+        self.f.initialized = False
+        (await self.scheduler_pass()).assert_not_awaited()
+
+    async def test_it_outlives_the_daemon_and_changes_waiting_do_too(self) -> None:
+        await self.switch(True)
+        self.d._mark_folder_dirty(self.f, time.time())
+        restarted = self.new_daemon()
+        self.assertTrue(restarted.cfg["work_offline"])
+        f = restarted.folders["a"]
+        self.assertEqual(restarted._folder_state(f, time.time())["state"], "offline")
+        self.assertTrue(restarted._folder_state(f, time.time())["localChanges"])
+
+    async def test_changes_already_waiting_are_saved_when_it_goes_on(self) -> None:
+        self.d._mark_folder_dirty(self.f, time.time())
+        await self.switch(True)
+        self.assertTrue(self.new_daemon().folders["a"].dirty_since)
+
+    async def test_turning_it_off_catches_up_without_undoing_a_pause(self) -> None:
+        other = Folder("b", "Cloud", "other", str(self.root / "other"), paused=True)
+        self.d.folders[other.id] = other
+        await self.switch(True)
+        self.f.retry_at = time.time() + 600
+        self.f.backoff = 600
+        self.f.error, self.f.error_kind = "dial tcp: unreachable", "network"
+        message = await self.switch(False)
+        self.assertIn("catching up", message)
+        self.assertIn("1 paused", message)
+        self.assertEqual((self.f.retry_at, self.f.backoff, self.f.error), (0, 0, ""))
+        self.assertTrue(self.d._folder_due(self.f, time.time()))
+        self.assertTrue(other.paused, "a folder's own pause is its own")
+        self.assertFalse(self.d._folder_due(other, time.time()))
+        spec = self.d.cfg["remotes"]["Cloud"]["folders"][0]
+        self.assertFalse(spec["paused"], "the switch never rewrites folders")
+
+    async def test_a_quick_trip_offline_lists_nothing_again(self) -> None:
+        """Listing a big folder takes minutes, and on Dropbox a few too many earn a five-minute
+        wait. One synced moments ago with no edits has nothing to catch up on."""
+        self.f.initialized = True
+        due = self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.assertEqual(await self.switch(False), "Back online")
+        self.assertEqual(self.f.next_due, due, "it keeps its place in the schedule")
+        (await self.scheduler_pass()).assert_not_awaited()
+
+    async def test_a_check_that_fell_due_meanwhile_runs_on_return(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.f.next_due = time.time() - 1
+        self.assertEqual(await self.switch(False), "Back online; catching up now")
+        (await self.scheduler_pass()).assert_awaited_once()
+
+    async def test_edits_made_offline_go_out_on_return(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.d._mark_folder_dirty(self.f, time.time())
+        self.assertIn("catching up", await self.switch(False))
+        self.assertLess(self.d._folder_due_at(self.f, time.time()), self.f.next_due)
+
+    async def test_a_folder_that_was_failing_is_tried_at_once(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.f.error, self.f.error_kind = "dial tcp: unreachable", "network"
+        self.assertIn("catching up", await self.switch(False))
+        (await self.scheduler_pass()).assert_awaited_once()
+
+    async def test_a_sync_the_switch_stopped_runs_again_on_return(self) -> None:
+        self.f.initialized = True
+        self.running_worker()
+        await self.start()
+        await self.switch(True)
+        await self.settle()
+        self.assertIn("catching up", await self.switch(False))
+        (await self.scheduler_pass()).assert_awaited_once()
+
+    async def test_catching_up_is_an_ordinary_sync(self) -> None:
+        await self.switch(True)
+        self.d._mark_folder_dirty(self.f, time.time())
+        await self.switch(False)
+        params = await self.start()
+        self.assertNotIn("resync", params)
+        self.assertNotIn("force", params)
+
+    async def test_a_sync_under_way_winds_down_and_nothing_restarts_it(self) -> None:
+        proc = self.running_worker()
+        await self.start()
+        await self.d.cmd_sync_now({"id": "a"})
+        self.assertTrue(self.f.rerun)
+        self.assertIn("under way", await self.switch(True))
+        await self.settle()
+        proc.send_signal.assert_called_once_with(signal.SIGINT)
+        self.assertEqual(self.state()["state"], "offline")
+        self.assertFalse(self.d._folder_due(self.f, time.time()), "no rerun afterwards")
+
+    async def test_stopping_never_goes_through_job_stop(self) -> None:
+        """It loses the listings: a resync follows, deleted files come back, and on a backend
+        without atomic uploads a partial upload replaces the whole file on both sides."""
+        self.running_worker()
+        await self.start()
+        await self.d._cancel_sync(self.f)
+        calls = [c.args[0] for c in self.rc_mock.call_args_list]
+        self.assertNotIn("job/stop", calls)
+        self.assertFalse(self.f.job_id or self.f.stopping)
+
+    async def test_a_sync_that_wont_wind_down_is_ended(self) -> None:
+        async def hang() -> None:
+            await asyncio.sleep(60)
+
+        proc = self.running_worker()
+        proc.wait = hang
+        stop_worker = self.d._stop_worker = AsyncMock()
+        await self.start()
+        await self.d._cancel_sync(self.f, wait=0.01)
+        stop_worker.assert_awaited_once_with("a")
+        self.assertFalse(self.f.job_id or self.f.stopping)
+
+    async def test_two_stops_at_once_signal_once(self) -> None:
+        proc = self.running_worker()
+        await self.start()
+        await asyncio.gather(self.d._cancel_sync(self.f), self.d._cancel_sync(self.f))
+        proc.send_signal.assert_called_once_with(signal.SIGINT)
+
+    async def test_a_sync_winding_down_is_not_read_as_a_failure(self) -> None:
+        await self.start()
+        self.d._finish_sync = AsyncMock()
+
+        async def stopped_meanwhile(*_args, **_kwargs) -> dict:
+            self.f.stopping = True
+            return {"finished": True, "success": False, "error": "context canceled"}
+
+        self.running_worker()
+        self.rc_mock.side_effect = stopped_meanwhile
+        await self.d._poll_job(self.f)
+        await self.d._poll_job(self.f)
+        self.d._finish_sync.assert_not_awaited()
+
+    async def test_edits_a_stopped_sync_set_out_with_stay_waiting(self) -> None:
+        self.running_worker()
+        self.d._mark_folder_dirty(self.f, time.time() - 60)
+        await self.start()
+        await self.switch(True)
+        await self.settle()
+        self.assertTrue(self.state()["localChanges"])
+        self.assertTrue(self.new_daemon().folders["a"].dirty_since)
+
+    async def test_a_sync_that_was_still_starting_is_stopped_too(self) -> None:
+        await self.switch(True)
+        self.running_worker()
+        self.f.job_id = 7
+        self.d._stop_syncs_for_offline()
+        await self.settle()
+        self.assertFalse(self.f.job_id)
+
+    async def test_coming_straight_back_syncs_again(self) -> None:
+        self.running_worker()
+        await self.start()
+        await self.switch(True)
+        await self.switch(False)
+        await self.settle()
+        self.assertFalse(self.f.stopping)
+        self.assertTrue(self.d._folder_due(self.f, time.time()))
+
+    async def test_the_switch_hides_a_network_failure_in_flight(self) -> None:
+        await self.start()
+        await self.switch(True)
+        await self.finish(self.failed_job(UNREACHABLE))
+        self.assertEqual(self.state()["state"], "offline")
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 0)
+
+    async def test_attention_stays_visible_and_its_fix_waits(self) -> None:
+        self.d._folder_attention(self.f, "safety", "Check both copies")
+        await self.switch(True)
+        self.assertEqual(self.state()["state"], "offline")
+        self.assertTrue(self.state()["attention"])
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 1)
+        reply = await self.d.cmd_resolve({"id": "a", "action": "resync"})
+        self.assertNotIn("Resyncing", reply["message"])
+        self.assertFalse(self.d._folder_due(self.f, time.time()))
+        await self.switch(False)
+        self.assertTrue((await self.start())["resync"])
+
+    async def test_resume_and_new_folders_wait_and_say_so(self) -> None:
+        self.f.paused = True
+        self.f.path = "docs"
+        self.d.drives["Cloud"] = Drive("Cloud")
+        await self.switch(True)
+        reply = await self.d.cmd_pause_folder({"id": "a", "paused": False})
+        self.assertNotIn("catching up", reply["message"])
+        added = await self.d.cmd_add_folder(
+            {"remote": "Cloud", "path": "new", "local": str(self.root / "new")}
+        )
+        self.assertIn("go back online", added["message"])
+        self.assertEqual(
+            self.d._folder_state(self.d.folders[added["id"]], time.time())["state"],
+            "offline",
+        )
+        self.assertFalse(self.d._folder_due(self.d.folders[added["id"]], time.time()))
+
+    async def test_reloading_the_config_applies_a_hand_edit(self) -> None:
+        cfg = config.load()
+        cfg["work_offline"] = True
+        config.save(cfg)
+        self.d.load_remotes = AsyncMock()
+        await self.d.reload()
+        self.assertEqual(self.state()["state"], "offline")
+        self.f.retry_at = time.time() + 600
+        cfg["work_offline"] = False
+        config.save(cfg)
+        await self.d.reload()
+        self.assertEqual(self.f.retry_at, 0, "turned off by hand, it catches up too")
+
+
+class CheckingProgress(OfflineSwitch):
+    """rclone counts checks without a total, so the last sync's count stands in for one."""
+
+    async def poll(self, stats: dict) -> None:
+        self.running_worker()
+        self.f.job_id = 7
+        self.rc_mock.side_effect = [{"finished": False}, stats]
+        await self.d._poll_job(self.f)
+        self.rc_mock.side_effect = None
+
+    async def finish_with(self, stats: dict | Exception, success: bool = True) -> None:
+        self.running_worker()
+        self.f.job_id = 7
+        self.rc_mock.side_effect = [stats]
+        await self.finish({"success": success, "error": "" if success else "boom"})
+        self.rc_mock.side_effect = None
+
+    async def test_a_finished_sync_gives_the_next_one_its_total(self) -> None:
+        await self.finish_with({"checks": 158322})
+        self.assertEqual(self.new_daemon().folders["a"].expected_checks, 158322)
+        await self.poll({"checks": 24612})
+        self.assertEqual(self.f.progress["checks"], 24612)
+        self.assertEqual(self.f.progress["expectedChecks"], 158322)
+
+    async def test_nothing_is_promised_before_the_first_sync_finishes(self) -> None:
+        await self.poll({"checks": 500})
+        self.assertEqual(self.state()["progress"]["expectedChecks"], 0)
+
+    async def test_only_a_finished_sync_changes_the_total(self) -> None:
+        self.f.expected_checks = 158322
+        await self.finish_with({"checks": 12}, success=False)
+        self.assertEqual(self.f.expected_checks, 158322)
+
+    async def test_stats_that_cant_be_read_keep_the_total(self) -> None:
+        self.f.expected_checks = 158322
+        await self.finish_with(RcError("gone"))
+        self.assertEqual(self.f.expected_checks, 158322)
+
+
+class WorkOfflineDrives(OfflineSwitch):
+    """Drives on the same switch: each keeps its own, so exactly what was on comes back."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.d.engine_state = "running"
+        self.d.cfg["mount_root"] = str(self.root / "stream")
+        self.d.remotes["Idle"] = self.d.remotes["Cloud"]
+        self.d.cfg["remotes"]["Cloud"]["stream"] = True
+        self.d.cfg["remotes"]["Idle"] = config.normalize_remote({"stream": False})
+        self.drive = self.d.drives["Cloud"] = Drive(
+            "Cloud",
+            mount_state="mounted",
+            mount_point=str(self.d.desired_mount_point("Cloud")),
+            kernel_path=str(self.d.desired_mount_point("Cloud")),
+            mounted_fs="Cloud:",
+        )
+        self.idle = self.d.drives["Idle"] = Drive("Idle")
+        self.pending = 0
+        self.unmount_error: RcError | None = None
+        self.rc_mock.side_effect = self.answer
+        self.mount = self.d._mount = AsyncMock(side_effect=self.mounted)
+
+    async def answer(self, method: str, params=None, timeout=None) -> dict:
+        if method == "vfs/stats":
+            return {"diskCache": {"uploadsQueued": self.pending}}
+        if method == "mount/unmount" and self.unmount_error:
+            raise self.unmount_error
+        return {"jobid": 1}
+
+    async def mounted(self, d: Drive) -> None:
+        d.mount_state = "mounted"
+
+    async def go(self, on: bool) -> str:
+        message = await self.switch(on)
+        await self.settle()
+        return message
+
+    def shown(self, name: str) -> dict:
+        drives = self.d.build_state()["drives"]
+        return next(d for d in drives if d["name"] == name)
+
+    def unmounts(self) -> int:
+        calls = self.rc_mock.call_args_list
+        return sum(1 for c in calls if c.args[0] == "mount/unmount")
+
+    async def test_every_drive_disconnects_and_keeps_its_own_switch(self) -> None:
+        await self.go(True)
+        self.assertEqual(self.drive.mount_state, "off")
+        self.assertTrue(self.d.cfg["remotes"]["Cloud"]["stream"])
+        self.assertEqual(self.d.build_state()["summary"]["mounted"], 0)
+        self.assertEqual(self.d.build_state()["summary"]["streaming"], 1)
+        self.assertEqual(self.shown("Cloud")["mountState"], "offline")
+        self.assertEqual(self.shown("Idle")["mountState"], "off", "this one stays off")
+
+    async def test_back_online_brings_back_exactly_what_was_on(self) -> None:
+        await self.go(True)
+        await self.go(False)
+        self.assertEqual(self.drive.mount_state, "mounted")
+        self.assertEqual(self.idle.mount_state, "off")
+        self.mount.assert_awaited_once_with(self.drive)
+        self.assertEqual(self.shown("Cloud")["mountState"], "mounted")
+
+    async def test_nothing_mounts_after_a_restart(self) -> None:
+        await self.go(True)
+        restarted = self.new_daemon()
+        restarted.engine_state = "running"
+        restarted.drives["Cloud"] = Drive("Cloud")
+        restarted._mount = AsyncMock()
+        self.assertFalse(restarted._wants_mount("Cloud"))
+        await restarted.reconcile_drive("Cloud", force=True)
+        restarted._mount.assert_not_awaited()
+
+    async def tick(self, uploads: int) -> None:
+        """One real tick, with rclone reporting this many uploads for the mounted drive."""
+        self.d.rc_batch = AsyncMock(
+            return_value=[
+                {"mountPoints": [{"MountPoint": self.drive.mount_point}]},
+                {"diskCache": {"uploadsQueued": uploads}},
+                {},
+            ]
+        )
+        self.d._rclone_conf_sig = self.d._rclone_conf_signature()
+        with patch(
+            "guac.daemon.util.read_mountinfo",
+            return_value={self.drive.kernel_path: {}},
+        ):
+            await self.d._tick()
+        await self.settle()
+
+    async def test_uploads_hold_a_drive_only_until_they_finish(self) -> None:
+        self.pending = self.drive.uploads = 2
+        self.assertIn("Finishing", await self.go(True))
+        self.assertEqual(self.drive.mount_state, "mounted")
+        self.assertEqual(self.unmounts(), 0, "nothing is forced")
+        self.assertEqual(self.drive.error_kind, "uploads_pending")
+        self.assertIn("still uploading", self.shown("Cloud")["error"])
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 0)
+        await self.tick(uploads=2)
+        self.assertEqual(self.drive.mount_state, "mounted", "it keeps waiting")
+        self.pending = 0
+        await self.tick(uploads=0)
+        self.assertEqual(self.drive.mount_state, "off", "not 30 seconds later")
+        self.assertEqual(self.shown("Cloud")["error"], "")
+        self.assertEqual(self.shown("Cloud")["mountState"], "offline")
+
+    async def test_a_busy_drive_can_be_let_go_and_still_comes_back(self) -> None:
+        self.unmount_error = RcError("device or resource busy")
+        await self.go(True)
+        self.assertEqual(self.drive.mount_state, "mounted")
+        self.assertEqual(self.drive.error_kind, "busy")
+        self.unmount_error = None
+        await self.d.cmd_unmount_anyway({"remote": "Cloud"})
+        self.assertEqual(self.drive.mount_state, "off")
+        self.assertTrue(self.d.cfg["remotes"]["Cloud"]["stream"], "its switch is kept")
+        await self.go(False)
+        self.assertEqual(self.drive.mount_state, "mounted")
+
+    async def test_unmount_anyway_is_only_for_the_way_offline(self) -> None:
+        with self.assertRaises(UserError):
+            await self.d.cmd_unmount_anyway({"remote": "Cloud"})
+        self.assertEqual(self.drive.mount_state, "mounted")
+        self.assertEqual(self.unmounts(), 0)
+
+    async def test_changing_your_mind_leaves_a_held_drive_connected(self) -> None:
+        self.pending = 2
+        await self.go(True)
+        await self.go(False)
+        self.assertEqual(self.drive.mount_state, "mounted")
+        self.assertEqual((self.drive.error, self.drive.error_kind), ("", ""))
+        self.assertEqual(self.unmounts(), 0)
+        self.mount.assert_not_awaited()
+
+    async def test_connecting_is_refused_but_leaving_is_not(self) -> None:
+        await self.go(True)
+        for command, args in (
+            (self.d.cmd_stream, {"remote": "Idle", "on": True}),
+            (self.d.cmd_stream_all, {"on": True}),
+            (self.d.cmd_takeover, {"remote": "Cloud"}),
+        ):
+            with self.assertRaisesRegex(UserError, "offline"):
+                await command(args)
+        self.assertFalse(self.d.cfg["remotes"]["Idle"]["stream"])
+        await self.d.cmd_stream({"remote": "Cloud", "on": False})
+        await self.go(False)
+        self.mount.assert_not_awaited()
+
+    async def test_a_failed_drive_goes_quiet_and_is_tried_again_on_return(self) -> None:
+        self.drive.mount_state, self.drive.error_kind = "error", "other"
+        self.drive.error, self.drive.retry_at = "Mount failed", float("inf")
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 1)
+        await self.go(True)
+        self.assertEqual(self.shown("Cloud")["mountState"], "offline")
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 0)
+        await self.go(False)
+        self.mount.assert_awaited_once_with(self.drive)
+
+    async def test_quotas_stop_asking_the_cloud(self) -> None:
+        self.d._refresh_quotas = AsyncMock()
+        self.d._refresh_recent = AsyncMock()
+        self.d.online = True
+        self.d._sleep = AsyncMock(side_effect=lambda _: self.d._stop.set())
+        await self.go(True)
+        await self.d._slow_loop()
+        self.d._refresh_quotas.assert_not_awaited()
+        await self.go(False)
+        self.d._stop.clear()
+        await self.d._slow_loop()
+        self.d._refresh_quotas.assert_awaited_once()
 
 
 @unittest.skipUnless(shutil.which("rclone"), "real-job coverage needs rclone")
@@ -428,6 +1108,44 @@ class RealBisyncRecovery(RecoverySandbox):
         self.assertEqual(self.state()["conflictCount"], 0)
         self.assertTrue((self.local / "0.conflict1.md").exists())
 
+    async def test_connection_lost_during_a_transfer_keeps_deletions(self) -> None:
+        (self.local / "0.md").unlink()
+        (self.local / "1.md").write_text("edited offline\n")
+        # What that failure leaves: the listings set aside, their backups next to them
+        for listing in paths.bisync_dir("a").glob("*.lst"):
+            shutil.copy2(listing, f"{listing}-old")
+            listing.rename(f"{listing}-err")
+        await self.d._finish_sync(
+            self.f,
+            self.failed_job(
+                "Bisync critical error: Put: dial tcp: connection refused\n"
+                "Bisync aborted. Must run --resync to recover."
+            ),
+        )
+        self.assertEqual(self.state()["state"], "waiting")
+        self.f.retry_at = 0
+        await self.sync()
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        self.assertFalse(self.f.run_resync, "an ordinary sync is all it takes")
+        self.assertFalse((self.local / "0.md").exists(), "not brought back")
+        self.assertFalse((self.cloud / "0.md").exists(), "and gone from the cloud")
+        self.assertEqual((self.cloud / "1.md").read_text(), "edited offline\n")
+
+    async def test_partial_upload_left_in_the_cloud_never_costs_the_file(self) -> None:
+        # A backend without atomic uploads can keep what arrived before the connection went
+        whole = "the whole file\n" * 2000
+        (self.local / "big.bin").write_text(whole)
+        (self.cloud / "big.bin").write_text(whole[:100])
+        for listing in paths.bisync_dir("a").glob("*.lst"):
+            shutil.copy2(listing, f"{listing}-old")
+            listing.rename(f"{listing}-err")
+        await self.sync()
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        for directory in (self.local, self.cloud):
+            versions = [p.read_text() for p in directory.glob("big*.bin")]
+            self.assertIn(whole, versions, f"the whole file is in {directory}")
+        self.assertEqual(self.state()["conflictCount"], 1, "and the user is told")
+
     async def test_repeated_missing_listings_stop_and_offer_resync(self) -> None:
         for attempt in range(2):
             listings = list(paths.bisync_dir("a").glob("*.lst"))
@@ -446,6 +1164,183 @@ class RealBisyncRecovery(RecoverySandbox):
         await self.sync()
         self.assertEqual(self.state()["state"], "synced")
         self.assertEqual(len(list(self.local.glob("*.md"))), 4)
+
+
+@unittest.skipUnless(shutil.which("rclone"), "real-job coverage needs rclone")
+class RealNetworkLoss(RecoverySandbox):
+    """A real HTTP remote, so a lost connection is a genuine one."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.server: subprocess.Popen | None = None
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        (self.root / "rclone.conf").write_text(
+            "[Cloud]\ntype = webdav\nvendor = other\n"
+            f"url = http://127.0.0.1:{self.port}\n"
+        )
+        self.d.remotes["Cloud"]["type"] = "webdav"
+        self.f.initialized = False
+        self.serve()
+        for i in range(8):
+            (self.cloud / f"{i}.md").write_text(f"original {i}\n")
+        await self.sync()
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+
+    async def asyncTearDown(self) -> None:
+        self.cut()
+        await super().asyncTearDown()
+
+    def serve(self) -> None:
+        self.server = subprocess.Popen(
+            ["rclone", "serve", "webdav", str(self.cloud)]
+            + ["--addr", f"127.0.0.1:{self.port}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with socket.socket() as probe:
+                if probe.connect_ex(("127.0.0.1", self.port)) == 0:
+                    return
+            time.sleep(0.05)
+        self.fail("the test server did not start")
+
+    def cut(self) -> None:
+        if self.server is not None:
+            self.server.kill()
+            self.server.wait()
+            self.server = None
+
+    async def sync(self) -> None:
+        self.assertTrue(await self.d._start_sync(self.f))
+        deadline = time.monotonic() + 20
+        while self.f.job_id and time.monotonic() < deadline:
+            await self.d._poll_job(self.f)
+            await asyncio.sleep(0.05)
+        self.assertFalse(self.f.job_id, "rclone job timed out")
+
+    async def test_waits_quietly_then_catches_up_without_a_resync(self) -> None:
+        self.cut()
+        (self.local / "0.md").write_text("edited with no network\n")
+        (self.local / "1.md").unlink()
+        self.d._mark_folder_dirty(self.f, time.time())
+        await self.sync()
+        state = self.state()
+        self.assertEqual((state["state"], state["errorKind"]), ("waiting", "network"))
+        self.assertTrue(state["localChanges"])
+        summary = self.d.build_state()["summary"]
+        self.assertEqual((summary["attention"], summary["waitingNetwork"]), (0, 1))
+
+        self.serve()
+        await self.d.cmd_sync_now({"id": "a"})
+        await self.sync()
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        self.assertFalse(self.state()["localChanges"])
+        self.assertFalse(self.f.run_resync)
+        self.assertEqual((self.cloud / "0.md").read_text(), "edited with no network\n")
+        self.assertFalse((self.local / "1.md").exists(), "not brought back")
+        self.assertFalse((self.cloud / "1.md").exists())
+
+    async def start_moving(self) -> bytes:
+        """A sync with a deletion and an edit to carry, stopped partway through a big upload."""
+        data = os.urandom(150 * 1024 * 1024)
+        (self.local / "big.bin").write_bytes(data)
+        (self.local / "1.md").unlink()
+        (self.local / "0.md").write_text("edited\n")
+        self.d._mark_folder_dirty(self.f, time.time())
+        self.assertTrue(await self.d._start_sync(self.f))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            await self.d._poll_job(self.f)
+            self.assertTrue(self.f.job_id, "the sync ended before it could be stopped")
+            if self.f.progress.get("bytes", 0) > 1_000_000:
+                return data
+            await asyncio.sleep(0.02)
+        self.fail("nothing moved")
+
+    async def stopped_by_the_switch(self) -> float:
+        started = time.monotonic()
+        await self.d.cmd_set_setting({"key": "work_offline", "value": True})
+        while self.d._tasks:
+            await asyncio.sleep(0.05)
+            self.assertLess(time.monotonic() - started, 50)
+        self.assertFalse(self.f.job_id)
+        self.assertFalse(self.d.workers, "its rclone is gone")
+        self.assertEqual(self.state()["state"], "offline")
+        return time.monotonic() - started
+
+    def assert_ordinary_sync_lost_nothing(self) -> None:
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        self.assertFalse(self.f.run_resync, "no resync: the listings survived")
+        self.assertFalse((self.local / "1.md").exists(), "deleted stays deleted")
+        self.assertFalse((self.cloud / "1.md").exists())
+        self.assertEqual((self.cloud / "0.md").read_text(), "edited\n")
+
+    async def test_going_offline_stops_a_sync_and_loses_nothing(self) -> None:
+        data = await self.start_moving()
+        await self.stopped_by_the_switch()
+        self.assertTrue(self.state()["localChanges"])
+        await self.d.cmd_set_setting({"key": "work_offline", "value": False})
+        await self.sync()
+        self.assert_ordinary_sync_lost_nothing()
+        self.assertEqual((self.cloud / "big.bin").read_bytes(), data)
+        self.assertEqual((self.local / "big.bin").read_bytes(), data)
+
+    async def test_a_dead_network_doesnt_hold_up_going_offline(self) -> None:
+        data = await self.start_moving()
+        self.cut()
+        await asyncio.sleep(0.5)
+        self.assertLess(
+            await self.stopped_by_the_switch(), 45, "not rclone's 4 minutes"
+        )
+        self.serve()
+        await self.d.cmd_set_setting({"key": "work_offline", "value": False})
+        await self.sync()
+        self.assert_ordinary_sync_lost_nothing()
+        kept = [p.read_bytes() for p in self.local.glob("big*")]
+        self.assertIn(data, kept, "a partial upload never replaces the whole file")
+
+    async def test_shutting_down_mid_sync_loses_nothing(self) -> None:
+        """What runs at logout, reboot and guac stop."""
+        data = await self.start_moving()
+        await self.d._shutdown()
+        self.assertFalse(self.f.job_id)
+        await self.sync()
+        self.assert_ordinary_sync_lost_nothing()
+        self.assertEqual((self.cloud / "big.bin").read_bytes(), data)
+
+    async def test_work_offline_runs_nothing_and_catches_up_once(self) -> None:
+        self.cut()
+        await self.d.cmd_set_setting({"key": "work_offline", "value": True})
+        (self.local / "0.md").write_text("edited offline\n")
+        self.d._mark_folder_dirty(self.f, time.time() - 60)
+        self.d.engine_state = "running"
+        await self.d._start_due_folders()
+        self.assertFalse(self.f.job_id, "no rclone while working offline")
+        self.assertFalse(self.d.workers)
+        self.assertEqual(self.state()["state"], "offline")
+        self.assertEqual(self.d.build_state()["summary"]["attention"], 0)
+
+        self.serve()
+        await self.d.cmd_set_setting({"key": "work_offline", "value": False})
+        self.assertTrue(self.d._folder_due(self.f, time.time()))
+        await self.sync()
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        self.assertFalse(self.f.run_resync)
+        self.assertEqual((self.cloud / "0.md").read_text(), "edited offline\n")
+
+
+class WidgetSource(unittest.TestCase):
+    def test_theme_colors_never_use_the_bare_name(self) -> None:
+        # QtQuick has its own Color singleton since Qt 6.12, which hides the shell's: under a
+        # plain import every theme color is undefined, and the panel loses them silently
+        bare = re.compile(r"(?<![\w.])Color\.[a-z]")
+        files = [*(REPO / "ui").glob("*.qml"), REPO / "docs/screenshots/shots.qml"]
+        for path in files:
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                self.assertIsNone(bare.search(line), f"{path.name}:{number}: {line}")
 
 
 @unittest.skipUnless(

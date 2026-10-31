@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -10,8 +11,8 @@ Item {
   id: root
 
   property var backend: null
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
 
   property var selectedProvider: null
@@ -136,7 +137,7 @@ Item {
       Text {
         visible: root.selectedProvider !== null
         text: root.selectedProvider ? root.selectedProvider.glyph : ""
-        color: root.selectedProvider ? root.selectedProvider.color : Color.accent
+        color: root.selectedProvider ? root.selectedProvider.color : Commons.Color.accent
         font.family: root.fontFamily
         font.pixelSize: Style.font.heading
       }
@@ -148,8 +149,8 @@ Item {
       Layout.fillWidth: true
       implicitHeight: okText.implicitHeight + Style.space(16)
       radius: Style.cornerRadius
-      color: Qt.alpha(Color.accent, 0.12)
-      borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+      color: Qt.alpha(Commons.Color.accent, 0.12)
+      borderSpec: Border.controlSpec("normal", Commons.Color.accent, Commons.Color.accent)
 
       Text {
         id: okText
@@ -263,7 +264,7 @@ Item {
               text: "󰅂"
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              color: provMouse.containsMouse ? Color.accent : root.dim
+              color: provMouse.containsMouse ? Commons.Color.accent : root.dim
             }
           }
         }
@@ -281,7 +282,7 @@ Item {
         implicitHeight: idCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
         ColumnLayout {
           id: idCol
@@ -350,7 +351,7 @@ Item {
           implicitHeight: ownCol.implicitHeight + Style.space(20)
           radius: Style.cornerRadius
           color: Qt.rgba(1, 1, 1, 0.03)
-          borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+          borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
           ColumnLayout {
             id: ownCol
@@ -412,8 +413,8 @@ Item {
           Layout.fillWidth: true
           implicitHeight: waitCol.implicitHeight + Style.space(16)
           radius: Style.cornerRadius
-          color: Qt.alpha(Color.accent, 0.1)
-          borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
+          color: Qt.alpha(Commons.Color.accent, 0.1)
+          borderSpec: Border.controlSpec("focus", root.foreground, Commons.Color.accent)
 
           ColumnLayout {
             id: waitCol

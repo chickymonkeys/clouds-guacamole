@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -13,7 +14,7 @@ ColumnLayout {
   property var patterns: []
   property var saved: []
   property bool canEdit: true
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property var suggestions: ["*.log", ".git/", "node_modules/", "__pycache__/", ".venv/", "build/", ".cache/", "*.iso"]
 
@@ -66,11 +67,11 @@ ColumnLayout {
     implicitHeight: chipRow.implicitHeight + Style.space(6)
     radius: Style.cornerRadius
     opacity: kind === "removed" ? 0.55 : 1
-    color: kind === "added" ? Qt.alpha(Color.accent, 0.12)
+    color: kind === "added" ? Qt.alpha(Commons.Color.accent, 0.12)
          : kind === "suggested" ? "transparent"
          : chipMouse.containsMouse && kind !== "fixed" ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(1, 1, 1, 0.04)
     borderSpec: Border.controlSpec(kind === "added" ? "selected" : (chipMouse.containsMouse && interactive ? "hover-cursor" : "normal"),
-                                   kind === "suggested" ? root.dim : root.foreground, Color.accent)
+                                   kind === "suggested" ? root.dim : root.foreground, Commons.Color.accent)
 
     Row {
       id: chipRow
@@ -83,7 +84,7 @@ ColumnLayout {
         text: "󰐕"
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption - Style.space(2)
-        color: chipMouse.containsMouse ? Color.accent : root.dim
+        color: chipMouse.containsMouse ? Commons.Color.accent : root.dim
       }
 
       Text {
@@ -93,7 +94,7 @@ ColumnLayout {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption - Style.space(1)
         font.strikeout: chip.kind === "removed"
-        color: chip.kind === "added" ? Color.accent
+        color: chip.kind === "added" ? Commons.Color.accent
              : chip.kind === "suggested" ? (chipMouse.containsMouse ? root.foreground : root.dim)
              : root.foreground
       }
@@ -104,7 +105,7 @@ ColumnLayout {
         text: chip.kind === "removed" ? "󰕌" : "󰅖"
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption - Style.space(1)
-        color: !chipMouse.containsMouse ? root.dim : (chip.kind === "removed" ? Color.accent : Color.urgent)
+        color: !chipMouse.containsMouse ? root.dim : (chip.kind === "removed" ? Commons.Color.accent : Commons.Color.urgent)
       }
     }
 
@@ -206,7 +207,7 @@ ColumnLayout {
       Layout.fillWidth: true
       textFormat: Text.PlainText
       text: root.typed.error || root.typed.explained.join("\n")
-      color: root.typed.error ? Color.urgent : Qt.darker(root.foreground, 1.25)
+      color: root.typed.error ? Commons.Color.urgent : Qt.darker(root.foreground, 1.25)
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption - Style.space(2)
       wrapMode: Text.WordWrap
@@ -244,7 +245,7 @@ ColumnLayout {
       text: (root.helpOpen ? "󰅀" : "󰅂") + " How patterns work"
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption - Style.space(2)
-      color: helpMouse.containsMouse ? Color.accent : root.dim
+      color: helpMouse.containsMouse ? Commons.Color.accent : root.dim
 
       MouseArea {
         id: helpMouse

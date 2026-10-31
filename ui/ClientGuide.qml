@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Guided creation of the user's own OAuth client, one step at a time, ending with the client
@@ -11,7 +12,7 @@ ColumnLayout {
   id: root
 
   property var service: null
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
   property var guide: null
@@ -82,7 +83,7 @@ ColumnLayout {
   Caption {
     visible: root.guide === null
     text: root.loadError !== "" ? root.loadError : "Loading the steps…"
-    color: root.loadError !== "" ? Color.urgent : root.dim
+    color: root.loadError !== "" ? Commons.Color.urgent : root.dim
   }
 
   // ---- why, and where we are
@@ -105,8 +106,8 @@ ColumnLayout {
         implicitWidth: index === root.step ? Style.space(18) : Style.space(8)
         implicitHeight: Style.space(8)
         radius: height / 2
-        color: index === root.step ? Color.accent
-             : index < root.step ? Qt.alpha(Color.accent, 0.45) : Qt.rgba(1, 1, 1, 0.12)
+        color: index === root.step ? Commons.Color.accent
+             : index < root.step ? Qt.alpha(Commons.Color.accent, 0.45) : Qt.rgba(1, 1, 1, 0.12)
         Behavior on implicitWidth { NumberAnimation { duration: 120 } }
 
         MouseArea {
@@ -136,7 +137,7 @@ ColumnLayout {
     implicitHeight: stepCol.implicitHeight + Style.space(20)
     radius: Style.cornerRadius
     color: Qt.rgba(1, 1, 1, 0.03)
-    borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+    borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
     ColumnLayout {
       id: stepCol
@@ -154,7 +155,7 @@ ColumnLayout {
           implicitWidth: Style.space(22)
           implicitHeight: Style.space(22)
           radius: width / 2
-          color: Qt.alpha(Color.accent, 0.18)
+          color: Qt.alpha(Commons.Color.accent, 0.18)
 
           Text {
             anchors.centerIn: parent
@@ -162,7 +163,7 @@ ColumnLayout {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
-            color: Color.accent
+            color: Commons.Color.accent
           }
         }
 
@@ -189,7 +190,7 @@ ColumnLayout {
         tooltipText: root.current && root.current.link ? root.current.link.url : ""
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
-        foreground: Color.accent
+        foreground: Commons.Color.accent
         bordered: true
         onClicked: root.service.openUrl(root.current.link.url)
       }
@@ -244,7 +245,7 @@ ColumnLayout {
               text: root.copiedValue === modelData.value ? "Copied" : "Copy"
               fontFamily: root.fontFamily
               fontSize: Style.font.caption
-              foreground: root.copiedValue === modelData.value ? Color.accent : root.foreground
+              foreground: root.copiedValue === modelData.value ? Commons.Color.accent : root.foreground
               bordered: true
               onClicked: root.copy(modelData.value)
             }
@@ -277,7 +278,7 @@ ColumnLayout {
     Caption {
       visible: root.idError !== ""
       text: root.idError
-      color: Color.urgent
+      color: Commons.Color.urgent
       font.pixelSize: Style.font.caption - Style.space(1)
     }
 
@@ -315,7 +316,7 @@ ColumnLayout {
     Caption {
       visible: root.secretError !== "" || (root.clientId !== "" && root.clientId === root.clientSecret)
       text: root.secretError !== "" ? root.secretError : "The client ID and the secret are the same: paste each into its own field"
-      color: Color.urgent
+      color: Commons.Color.urgent
       font.pixelSize: Style.font.caption - Style.space(1)
     }
 
@@ -376,7 +377,7 @@ ColumnLayout {
       text: root.step === root.stepCount - 1 ? "Done, paste it" : "Next"
       fontFamily: root.fontFamily
       fontSize: Style.font.caption
-      foreground: Color.accent
+      foreground: Commons.Color.accent
       bordered: true
       onClicked: root.step = Math.min(root.stepCount, root.step + 1)
     }
