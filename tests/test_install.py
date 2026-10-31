@@ -2,6 +2,7 @@
 """Local installer lifecycle checks with a throwaway home and stubbed shell commands."""
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -9,6 +10,70 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "chickymonkeys.guacamole"
+
+
+class RestartAfterUpdate(unittest.TestCase):
+    """The installer's restart decision on its own, with guacd's answers stubbed."""
+
+    STUBS = """
+set -euo pipefail
+UPDATE=true RESTART=true
+say() { echo "say: $*"; }
+warn() { echo "warn: $*"; }
+stop_daemon() { echo stopped; }
+sleep() { echo slept; }
+omarchy-restart-shell() { echo shell; }
+daemon_busy() {
+  local left
+  left=$(<"$COUNTER")
+  echo $((left > 0 ? left : 0))
+  echo $((left - 1)) >"$COUNTER"
+}
+"""
+
+    def restart(self, busy_for: int) -> str:
+        source = (REPO / "install.sh").read_text()
+        functions = ""
+        for name in ("wait_until_idle", "restart_after_update"):
+            found = re.search(
+                rf"^{name}\(\) \{{.*?^\}}\n", source, re.MULTILINE | re.DOTALL
+            )
+            self.assertIsNotNone(found, name)
+            assert found
+            functions += found.group()
+        with tempfile.TemporaryDirectory(prefix="gi-") as tmp:
+            counter = Path(tmp) / "counter"
+            counter.write_text(str(busy_for))
+            result = subprocess.run(
+                ["bash", "-c", self.STUBS + functions + "restart_after_update"],
+                env={**os.environ, "COUNTER": str(counter)},
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout
+
+    def test_an_idle_guacd_restarts_at_once(self) -> None:
+        output = self.restart(busy_for=0)
+        self.assertIn("stopped", output)
+        self.assertNotIn("slept", output)
+        self.assertNotIn("Waiting", output)
+
+    def test_a_routine_sync_is_waited_for(self) -> None:
+        output = self.restart(busy_for=3)
+        self.assertIn("Waiting", output)
+        self.assertEqual(output.count("slept"), 3)
+        self.assertIn("stopped", output)
+        self.assertNotIn("warn:", output)
+
+    def test_a_long_upload_is_left_alone_and_says_so(self) -> None:
+        output = self.restart(busy_for=1000)
+        self.assertNotIn("stopped", output)
+        self.assertIn("guac stop", output)
+        self.assertEqual(output.count("slept"), 30)
+        self.assertIn("shell", output, "the widget still updates")
 
 
 class InstallerTests(unittest.TestCase):

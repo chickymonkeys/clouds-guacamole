@@ -80,14 +80,27 @@ else:
 PY
 }
 
+# Stopping guacd cuts a sync short, but a routine one takes seconds: only something long is
+# worth leaving the old version running for
+wait_until_idle() {
+  local i
+  [[ $(daemon_busy) == 0 ]] && return 0
+  say "Waiting for guacd to finish syncing"
+  for i in {1..30}; do
+    sleep 1
+    [[ $(daemon_busy) == 0 ]] && return 0
+  done
+  return 1
+}
+
 # The shell loads a changed widget only when it restarts (its plugin reload keeps cached
 # QML), and guacd runs the Python it started with
 restart_after_update() {
   $UPDATE && $RESTART || return 0
-  if [[ $(daemon_busy) == 0 ]]; then
+  if wait_until_idle; then
     stop_daemon
   else
-    warn "guacd is uploading or syncing, so it keeps running the old version. Later: guac stop"
+    warn "guacd is still uploading or syncing, so it keeps running the old version, and the widget's new features won't work with it. Later: guac stop"
   fi
   if command -v omarchy-restart-shell >/dev/null 2>&1; then
     say "Restarting the shell to load the new widget (guacd starts again with it)"
