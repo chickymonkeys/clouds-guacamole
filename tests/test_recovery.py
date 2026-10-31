@@ -644,6 +644,49 @@ class WorkOffline(OfflineSwitch):
         spec = self.d.cfg["remotes"]["Cloud"]["folders"][0]
         self.assertFalse(spec["paused"], "the switch never rewrites folders")
 
+    async def test_a_quick_trip_offline_lists_nothing_again(self) -> None:
+        """Listing a big folder takes minutes, and on Dropbox a few too many earn a five-minute
+        wait. One synced moments ago with no edits has nothing to catch up on."""
+        self.f.initialized = True
+        due = self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.assertEqual(await self.switch(False), "Back online")
+        self.assertEqual(self.f.next_due, due, "it keeps its place in the schedule")
+        (await self.scheduler_pass()).assert_not_awaited()
+
+    async def test_a_check_that_fell_due_meanwhile_runs_on_return(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.f.next_due = time.time() - 1
+        self.assertEqual(await self.switch(False), "Back online; catching up now")
+        (await self.scheduler_pass()).assert_awaited_once()
+
+    async def test_edits_made_offline_go_out_on_return(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.d._mark_folder_dirty(self.f, time.time())
+        self.assertIn("catching up", await self.switch(False))
+        self.assertLess(self.d._folder_due_at(self.f, time.time()), self.f.next_due)
+
+    async def test_a_folder_that_was_failing_is_tried_at_once(self) -> None:
+        self.f.initialized = True
+        self.f.next_due = time.time() + 100
+        await self.switch(True)
+        self.f.error, self.f.error_kind = "dial tcp: unreachable", "network"
+        self.assertIn("catching up", await self.switch(False))
+        (await self.scheduler_pass()).assert_awaited_once()
+
+    async def test_a_sync_the_switch_stopped_runs_again_on_return(self) -> None:
+        self.f.initialized = True
+        self.running_worker()
+        await self.start()
+        await self.switch(True)
+        await self.settle()
+        self.assertIn("catching up", await self.switch(False))
+        (await self.scheduler_pass()).assert_awaited_once()
+
     async def test_catching_up_is_an_ordinary_sync(self) -> None:
         await self.switch(True)
         self.d._mark_folder_dirty(self.f, time.time())

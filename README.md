@@ -66,7 +66,7 @@ The _Cloud Drives_ switch at the top of the panel covers everything. Turn it off
 - **Nothing reaches the cloud by itself.** Every drive disconnects, no rclone runs for any folder, and quotas stop refreshing, also across restarts. Only something you start yourself, like adding a drive, still connects. Streamed files aren't reachable meanwhile, not even cached ones: keep what you'll need as a local folder.
 - **Off means off within seconds.** A running sync winds down at once, through bisync's graceful shutdown, so nothing is lost and the next sync is an ordinary one. A drive stays connected until its uploads are out, then disconnects by itself. If a file is open in it, or there's no network to finish on, its card says so and offers _Unmount anyway_. Uploads left over stay in the cache and continue when the drive reconnects.
 - **Folders keep noticing your edits** and say _offline, changes waiting_, and the header counts how many have some.
-- **Turning it back on brings back exactly what was on.** The drives you were streaming reconnect, each folder catches up with one ordinary sync, with the same conflict copies and safety stop as any other sync. A drive you weren't streaming stays off and a folder you paused stays paused. Each drive's own switch is dimmed while you're offline, and `guac stream DRIVE off` still takes one out of what comes back.
+- **Turning it back on brings back exactly what was on.** The drives you were streaming reconnect. A folder with edits waiting, a stopped or failing sync, or a check that fell due meanwhile catches up at once with one ordinary sync, with the same conflict copies and safety stop as any other sync. A folder that hasn't missed anything keeps its place in the schedule, so a quick trip offline costs nothing. A drive you weren't streaming stays off and a folder you paused stays paused. Each drive's own switch is dimmed while you're offline, and `guac stream DRIVE off` still takes one out of what comes back.
 
 With nothing to go offline from, no drive streaming and no local folder, the same switch streams every drive.
 
@@ -283,7 +283,7 @@ The end-to-end suite runs `guacd` against two local rclone `alias` remotes in te
 - streaming and write-through, busy unmount, cleanup of empty mount folders;
 - keeping folders local: syncing in both directions, deletions, conflicts, the safety stop and resync, and folders of one drive syncing in parallel;
 - pausing a folder: no rclone runs while paused, edits on both sides wait, and resuming catches up with one normal sync;
-- working offline: a drive waits for its uploads, then disconnects and keeps its own switch; no rclone runs for any folder, also after a restart; a new folder waits for its first sync; turning it off brings back only the drives that were on, catches up with one normal sync and leaves a paused folder paused;
+- working offline: a drive waits for its uploads, then disconnects and keeps its own switch; no rclone runs for any folder, also after a restart; a new folder waits for its first sync; turning it off brings back only the drives that were on, catches up with one normal sync, lists nothing again after a quick trip, and leaves a paused folder paused;
 - recent files;
 - moving the stream and sync roots;
 - recovery from an rclone crash, and taking over a foreign mount;

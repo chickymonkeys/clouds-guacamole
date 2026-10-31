@@ -666,6 +666,16 @@ def test_work_offline_roundtrip(sb: Sandbox) -> None:
         assert f"sync {paused} (" not in since(mark), since(mark)
         wait(lambda: sb.folder(fid)["state"] == "synced", 40, "settled after catch-up")
         settle(sb, fid)
+
+        # A quick trip changes nothing, so a folder just synced isn't listed all over again
+        mark = log.stat().st_size
+        sb.ok("set_setting", key="work_offline", value=True)
+        wait(lambda: not sb.drive("CloudA")["mounted"], 15, "offline again")
+        sb.ok("set_setting", key="work_offline", value=False)
+        wait(lambda: sb.drive("CloudA")["mounted"], 15, "back again")
+        time.sleep(2)
+        assert f"sync {fid} (" not in since(mark), since(mark)
+        assert sb.folder(fid)["state"] == "synced"
     finally:
         # Left behind, they would take sync slots from the scenarios after this one
         sb.ok("remove_folder", id=paused)

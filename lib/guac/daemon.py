@@ -3153,13 +3153,19 @@ class Daemon:
         self._ensure_watching(f)
 
     def _catch_up_folders(self) -> int:
-        """Every folder not held back by its own pause. How many are paused."""
+        """A folder that was failing tries again at once. The others keep their place in the
+        schedule: edits go out by themselves, and a check that fell due runs now, but checking
+        everything regardless costs a full listing of every folder, minutes on a big one, and
+        Dropbox answers a few too many with a five-minute wait. How many are paused."""
         paused = 0
+        now = time.time()
         for f in self.folders.values():
             if f.paused:
                 paused += 1
-            else:
+            elif f.error or f.retry_at > now:
                 self._catch_up(f)
+            else:
+                self._ensure_watching(f)
         self.wake()
         return paused
 
@@ -3174,6 +3180,7 @@ class Daemon:
     async def _stop_sync_for_offline(self, f: Folder) -> None:
         await self._cancel_sync(f)
         self._keep_changes_waiting(f)
+        f.next_due = 0  # it never finished looking, whatever the schedule says
         self._persist_folder(f)
         self.mark()
         self.wake()  # back online meanwhile: it's free to start again
@@ -3213,9 +3220,13 @@ class Daemon:
             return "Working offline; nothing connects until you go back online"
         log.info("back from working offline")
         paused = self._back_online()
-        return "Back online; catching up now" + (
-            f" ({paused} paused)" if paused else ""
+        now = time.time()
+        catching_up = any(
+            f.job_id or self._folder_due_at(f, now) <= now + DEBOUNCE
+            for f in self.folders.values()
         )
+        message = "Back online; catching up now" if catching_up else "Back online"
+        return message + (f" ({paused} paused)" if paused else "")
 
     async def cmd_set_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
