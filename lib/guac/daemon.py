@@ -190,6 +190,9 @@ class Folder:
         default_factory=list
     )  # files the running sync is transferring
     rerun: bool = False  # "sync now" was asked while a sync was already running
+    stopping: bool = (
+        False  # its running sync is winding down, and has no result to read
+    )
 
 
 @dataclass
@@ -830,24 +833,27 @@ class Daemon:
         except OSError:
             pass
 
-    async def _cancel_sync(self, f: Folder, wait: float = 10.0) -> None:
-        """Stop a running sync, give bisync a moment to wind down, then end its rclone."""
+    async def _cancel_sync(self, f: Folder, wait: float = 45.0) -> None:
+        """Stop a running sync through bisync's graceful shutdown: a signal to the sync's own
+        rclone. That keeps the listings, so the next sync is an ordinary one. rc job/stop must
+        not be used for this: it loses them, and the resync that follows brings deleted files
+        back and can copy a partial upload over the whole file. Bisync gives up on transfers
+        that won't end after 30 seconds, hence the wait."""
+        if f.stopping:
+            while f.stopping:
+                await asyncio.sleep(0.1)
+            return
+        f.stopping = True
         w = self.workers.get(f.id)
-        if f.job_id and w is not None:
-            try:
-                await self.rc("job/stop", {"jobid": f.job_id}, timeout=5, client=w.rcc)
-                deadline = time.monotonic() + wait
-                while time.monotonic() < deadline:
-                    js = await self.rc(
-                        "job/status", {"jobid": f.job_id}, timeout=3, client=w.rcc
-                    )
-                    if js.get("finished"):
-                        break
-                    await asyncio.sleep(0.2)
-            except RcError:
-                pass
+        try:
+            if f.job_id and w is not None and w.proc.returncode is None:
+                w.proc.send_signal(signal.SIGINT)
+                await asyncio.wait_for(w.proc.wait(), wait)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            log.warning("sync %s did not wind down; ending its rclone", f.id)
         f.job_id, f.progress, f.moving = 0, {}, []
         await self._stop_worker(f.id)
+        f.stopping = False
 
     async def _supervise_engine(self) -> None:
         delay = 1.0
@@ -1540,6 +1546,8 @@ class Daemon:
         return bool(f.job_id)
 
     async def _poll_job(self, f: Folder) -> None:
+        if f.stopping:
+            return
         group = f"guac/{f.id}"
         job = f.job_id
         w = self.workers.get(f.id)
@@ -1553,7 +1561,7 @@ class Daemon:
                 lost = "not found" in str(e).lower() or isinstance(e, RcUnavailable)
                 if not lost:
                     return
-        if f.job_id != job:
+        if f.job_id != job or f.stopping:
             return  # cancelled meanwhile (removed, or shutting down)
         if lost or w is None:
             log.warning("sync %s lost its rclone process; retrying", f.id)
@@ -3070,8 +3078,7 @@ class Daemon:
         self.save_cfg()
         f.paused = paused
         if paused:
-            # A sync under way is left to finish: stopping bisync part way loses its listings,
-            # and the resync that repairs them brings back files deleted while paused
+            # A sync under way is left to finish: a pause is in no hurry
             f.rerun = False
             self._persist_folder(f)
             message = (

@@ -8,6 +8,7 @@ import asyncio
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -22,7 +23,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from guac import config, filters, paths, providers
-from guac.daemon import Daemon, Folder, UserError
+from guac.daemon import Daemon, Folder, SyncWorker, UserError
 
 REPO = Path(__file__).resolve().parents[1]
 OMARCHY_SHELL = Path("/usr/share/omarchy/shell")
@@ -569,6 +570,58 @@ class SyncHandling(SchedulerJobs):
         self.assertEqual(reply["message"], "Syncing now (1 paused, 1 needs attention)")
 
 
+class StoppingASync(SchedulerJobs):
+    """Through a signal to the sync's own rclone, whatever the reason for stopping."""
+
+    def running_worker(self) -> Mock:
+        """The sync's own rclone, as far as stopping it goes."""
+        proc = Mock(returncode=None, wait=AsyncMock(return_value=0))
+        self.d.workers["a"] = SyncWorker(proc, Mock())
+        return proc
+
+    async def test_stopping_never_goes_through_job_stop(self) -> None:
+        """It loses the listings: a resync follows, deleted files come back, and on a backend
+        without atomic uploads a partial upload replaces the whole file on both sides."""
+        self.running_worker()
+        await self.start()
+        await self.d._cancel_sync(self.f)
+        calls = [c.args[0] for c in self.rc_mock.call_args_list]
+        self.assertNotIn("job/stop", calls)
+        self.assertFalse(self.f.job_id or self.f.stopping)
+
+    async def test_a_sync_that_wont_wind_down_is_ended(self) -> None:
+        async def hang() -> None:
+            await asyncio.sleep(60)
+
+        proc = self.running_worker()
+        proc.wait = hang
+        stop_worker = self.d._stop_worker = AsyncMock()
+        await self.start()
+        await self.d._cancel_sync(self.f, wait=0.01)
+        stop_worker.assert_awaited_once_with("a")
+        self.assertFalse(self.f.job_id or self.f.stopping)
+
+    async def test_two_stops_at_once_signal_once(self) -> None:
+        proc = self.running_worker()
+        await self.start()
+        await asyncio.gather(self.d._cancel_sync(self.f), self.d._cancel_sync(self.f))
+        proc.send_signal.assert_called_once_with(signal.SIGINT)
+
+    async def test_a_sync_winding_down_is_not_read_as_a_failure(self) -> None:
+        await self.start()
+        self.d._finish_sync = AsyncMock()
+
+        async def stopped_meanwhile(*_args, **_kwargs) -> dict:
+            self.f.stopping = True
+            return {"finished": True, "success": False, "error": "context canceled"}
+
+        self.running_worker()
+        self.rc_mock.side_effect = stopped_meanwhile
+        await self.d._poll_job(self.f)
+        await self.d._poll_job(self.f)
+        self.d._finish_sync.assert_not_awaited()
+
+
 class RealBisyncRecovery(RecoverySandbox):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
@@ -776,6 +829,39 @@ class RealNetworkLoss(RecoverySandbox):
         self.assertEqual((self.cloud / "0.md").read_text(), "edited with no network\n")
         self.assertFalse((self.local / "1.md").exists(), "not brought back")
         self.assertFalse((self.cloud / "1.md").exists())
+
+    async def start_moving(self) -> bytes:
+        """A sync with a deletion and an edit to carry, stopped partway through a big upload."""
+        data = os.urandom(150 * 1024 * 1024)
+        (self.local / "big.bin").write_bytes(data)
+        (self.local / "1.md").unlink()
+        (self.local / "0.md").write_text("edited\n")
+        self.d._mark_folder_dirty(self.f, time.time())
+        self.assertTrue(await self.d._start_sync(self.f))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            await self.d._poll_job(self.f)
+            self.assertTrue(self.f.job_id, "the sync ended before it could be stopped")
+            if self.f.progress.get("bytes", 0) > 1_000_000:
+                return data
+            await asyncio.sleep(0.02)
+        self.fail("nothing moved")
+
+    def assert_ordinary_sync_lost_nothing(self) -> None:
+        self.assertEqual(self.state()["state"], "synced", self.f.error)
+        self.assertFalse(self.f.run_resync, "no resync: the listings survived")
+        self.assertFalse((self.local / "1.md").exists(), "deleted stays deleted")
+        self.assertFalse((self.cloud / "1.md").exists())
+        self.assertEqual((self.cloud / "0.md").read_text(), "edited\n")
+
+    async def test_shutting_down_mid_sync_loses_nothing(self) -> None:
+        """What runs at logout, reboot and guac stop."""
+        data = await self.start_moving()
+        await self.d._shutdown()
+        self.assertFalse(self.f.job_id)
+        await self.sync()
+        self.assert_ordinary_sync_lost_nothing()
+        self.assertEqual((self.cloud / "big.bin").read_bytes(), data)
 
 
 class WidgetSource(unittest.TestCase):
