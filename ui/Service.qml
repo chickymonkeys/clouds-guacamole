@@ -26,7 +26,8 @@ Item {
   property string cloudRoot: home + "/Cloud"
   property var appSettings: ({})
   property var drives: []
-  property var summary: ({ drives: 0, streaming: 0, mounted: 0, folders: 0, syncing: 0, attention: 0, uploads: 0 })
+  property var summary: ({ drives: 0, streaming: 0, mounted: 0, folders: 0, syncing: 0, waitingNetwork: 0, localChanges: 0,
+                           attention: 0, uploads: 0 })
   property var transfers: ({ count: 0, speed: 0, names: [] })
   property var recent: []
   property var auth: ({ busy: false, waiting: false, url: "", error: "", success: "", remote: "" })
@@ -44,7 +45,7 @@ Item {
   // "error": something needs attention
   readonly property string statusState: {
     if (attention || actionFailed) return "error"
-    if (!connected || !online) return "offline"
+    if (!connected || !online || summary.waitingNetwork > 0) return "offline"
     if (hasDrives && (summary.streaming > 0 || summary.folders > 0) && summary.mounted === summary.streaming) return "online"
     return "offline"
   }
@@ -60,6 +61,7 @@ Item {
     if (summary.syncing > 0) parts.push("syncing")
     else if (summary.uploads > 0) parts.push(summary.uploads + " uploading")
     if (!online) parts.push("offline")
+    else if (summary.waitingNetwork > 0) parts.push("waiting for network")
     return parts.join(" · ")
   }
   readonly property bool hasDrives: drives.length > 0

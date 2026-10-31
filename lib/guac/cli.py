@@ -122,6 +122,8 @@ def print_status(state: dict[str, Any]) -> None:
             detail = f"synced {_ago(f['lastSync'])}" if st == "synced" else st
             if st == "paused" and f.get("localChanges"):
                 detail = "paused, changes waiting"
+            elif st == "waiting" and f.get("errorKind") == "network":
+                detail = "waiting for network"
             if st == "syncing" and f.get("progress", {}).get("totalTransfers"):
                 p = f["progress"]
                 detail = f"syncing {p['transfers']}/{p['totalTransfers']}"
@@ -131,6 +133,8 @@ def print_status(state: dict[str, Any]) -> None:
             )
             if f.get("attention"):
                 print(c(RED, f"        {f['attention']}"))
+            elif f.get("error") and st == "waiting":
+                print(c(DIM, f"        {f['error']}"))
             elif f.get("error"):
                 print(c(RED, f"        {f['error']}"))
             if f.get("conflictCount"):

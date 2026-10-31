@@ -17,6 +17,11 @@ ShellRoot {
       equal(Model.folderStateText({state: "syncing", resync: true, initialized: true,
                                   progress: {transfers: 1, totalTransfers: 3}}), "resyncing 1/3")
       equal(Model.folderStateText({state: "pending", resync: true, initialized: true}), "waiting to resync")
+      equal(Model.folderStateText({state: "waiting", errorKind: "network"}), "waiting for network")
+      equal(Model.folderStateText({state: "waiting", errorKind: "network", localChanges: true}), "no network, changes waiting")
+      equal(Model.folderStateText({state: "waiting", errorKind: "lock"}), "waiting for a previous sync")
+      equal(Model.folderGroup([{state: "waiting"}]).text, "waiting for network")
+      truth(!Model.folderStaysListed({state: "waiting"}), "waiting needs no look")
       setFolder("attention", "safety")
     },
     function() {

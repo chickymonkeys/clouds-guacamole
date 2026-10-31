@@ -39,6 +39,7 @@ Item {
       return s.transfers.speed > 0 ? t + " · " + Model.formatSpeed(s.transfers.speed) : t + "…"
     }
     if (s.summary.uploads > 0) return "Uploading " + s.summary.uploads + (s.summary.uploads === 1 ? " file" : " files")
+    if (s.summary.waitingNetwork > 0) return "Waiting for the network"
     if (s.summary.mounted < s.summary.streaming) return "Connecting…"
     if (s.summary.streaming === 0 && s.summary.folders === 0) return "Nothing streaming"
     return "Up to date"

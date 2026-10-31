@@ -60,6 +60,7 @@ DEBOUNCE = 4.0  # quiet time after a local change before syncing it
 FOLLOWUP_DEBOUNCE = 10.0  # changes seen while a sync ran (mostly its own writes)
 MAX_DIRTY_WAIT = 30.0  # never hold local changes back longer than this
 SCHEDULER_MAX_SLEEP = 30.0  # the scheduler looks this often even with nothing due
+NETWORK_MAX_BACKOFF = 600.0  # longest wait between tries without a network
 MOUNT_TIMEOUT = 90.0
 MAX_WATCH_DIRS = 100000
 MAX_BROWSE_ENTRIES = 2000
@@ -88,6 +89,9 @@ _IGNORED_EVENT_NAMES = [
 _IGNORED_EVENT_RE = re.compile(
     "|".join(fnmatch.translate(p) for p in _IGNORED_EVENT_NAMES)
 )
+
+# Failures that pass by themselves: a folder waits them out, nobody has anything to do
+_WAITING_KINDS = ("network", "lock")
 
 _SYSTEM_DIRS = [
     "/usr",
@@ -168,6 +172,7 @@ class Folder:
     backoff: float = 0.0
     dirty_since: float = 0.0
     last_event: float = 0.0
+    run_had_changes: bool = False  # the running sync set out with local edits to bring
     dirty_during_run: bool = False
     followup_only: bool = (
         False  # dirty only from events seen during the last run (mostly its own writes)
@@ -181,7 +186,6 @@ class Folder:
     conflicts: list[str] = field(default_factory=list)
     watching: bool = False
     watch_error: str = ""
-    waiting_network: bool = False
     moving: list[str] = field(
         default_factory=list
     )  # files the running sync is transferring
@@ -1304,8 +1308,11 @@ class Daemon:
                     f.attention = str(saved.get("attention", ""))
                     f.attention_code = str(saved.get("attention_code", ""))
                     f.error = str(saved.get("error", ""))
+                    f.error_kind = str(saved.get("error_kind", ""))
                     f.resync_reason = str(saved.get("resync_reason", ""))
                     f.recovery_attempted = bool(saved.get("recovery_attempted"))
+                    if saved.get("local_changes"):
+                        f.dirty_since = f.last_event = now
                     # Saved by older versions: one digest of filters.txt for every folder
                     f.filters_md5 = str(
                         saved.get("filters_md5") or self._legacy_filters_md5
@@ -1332,10 +1339,9 @@ class Daemon:
                 del self.folders[fid]
                 self.st["folders"].pop(fid, None)
 
-    def _persist_folder(self, f: Folder) -> None:
-        if f.id not in self.folders:
-            return
-        self.st["folders"][f.id] = {
+    @staticmethod
+    def _folder_record(f: Folder) -> dict[str, Any]:
+        return {
             "initialized": f.initialized,
             "last_sync": f.last_sync,
             "last_changes": f.last_changes,
@@ -1343,30 +1349,33 @@ class Daemon:
             "attention": f.attention,
             "attention_code": f.attention_code,
             "error": f.error,
+            "error_kind": f.error_kind,
             "filters_md5": f.filters_md5,
             "resync_reason": f.resync_reason,
             "recovery_attempted": f.recovery_attempted,
+            "local_changes": bool(f.dirty_since and not f.followup_only),
         }
+
+    def _persist_folder(self, f: Folder) -> None:
+        if f.id not in self.folders:
+            return
+        self.st["folders"][f.id] = self._folder_record(f)
         config.save_state(self.st)
 
     def _persist_all_folders(self) -> None:
         for f in self.folders.values():
-            self.st["folders"][f.id] = {
-                "initialized": f.initialized,
-                "last_sync": f.last_sync,
-                "last_changes": f.last_changes,
-                "conflicts": f.conflicts[:20],
-                "attention": f.attention,
-                "attention_code": f.attention_code,
-                "error": f.error,
-                "filters_md5": f.filters_md5,
-                "resync_reason": f.resync_reason,
-                "recovery_attempted": f.recovery_attempted,
-            }
+            self.st["folders"][f.id] = self._folder_record(f)
         config.save_state(self.st)
 
+    def _sync_held(self, f: Folder) -> bool:
+        """Only the user can start this folder syncing again."""
+        return f.paused
+
+    def _folder_blocked(self, f: Folder) -> bool:
+        return bool(self._sync_held(f) or f.job_id or f.attention)
+
     def _folder_due(self, f: Folder, now: float) -> bool:
-        if f.paused or f.job_id or f.attention:
+        if self._folder_blocked(f):
             return False
         if f.retry_at > now:
             return False
@@ -1380,7 +1389,7 @@ class Daemon:
 
     def _folder_due_at(self, f: Folder, now: float) -> float:
         """When _folder_due turns true for f if nothing else changes (inf: not by itself)."""
-        if f.paused or f.job_id or f.attention:
+        if self._folder_blocked(f) or f.remote not in self.remotes:
             return float("inf")
         if not f.initialized or f.resync_reason or f.force_next:
             at = now
@@ -1392,7 +1401,7 @@ class Daemon:
 
     def _scheduler_sleep(self, now: float) -> float:
         """How long the scheduler can sleep before a folder is due. Folders due but held back
-        (all sync slots busy, offline, drive not loaded) are looked at again every second."""
+        (all sync slots busy) are looked at again every second."""
         due_at = min(
             (self._folder_due_at(f, now) for f in self.folders.values()),
             default=float("inf"),
@@ -1412,49 +1421,41 @@ class Daemon:
             sleep = SCHEDULER_MAX_SLEEP
             if self.engine_state != "running":
                 continue
-            now = time.time()
-            # Kept folders never overlap (see _validate_local) and each sync has its own rclone
-            # process, so folders of the same drive sync side by side
-            running = [f for f in self.folders.values() if f.job_id]
-            # Local edits first, then never-synced folders, then routine checks
-            order = sorted(
-                self.folders.values(),
-                key=lambda f: (not f.dirty_since, f.initialized, f.next_due),
-            )
-            for f in order:
-                if len(running) >= MAX_SYNC_JOBS:
-                    break
-                if not self._folder_due(f, now):
-                    continue
-                # Only hold back after a real network failure: the route check alone can be wrong
-                if not self.online and f.error_kind == "network":
-                    if not f.waiting_network:
-                        f.waiting_network = True
-                        self.mark()
-                    continue
-                f.waiting_network = False
-                if f.remote not in self.remotes:
-                    continue
-                try:
-                    started = await self._start_sync(f)
-                except Exception as e:
-                    log.exception("could not start sync of %s", f.id)
-                    # Shown on the folder, and retried soon: most causes are passing
-                    if isinstance(e, OSError):
-                        f.error = (
-                            f"Can't use {e.filename or f.local}: {e.strerror or e}"
-                        )
-                    elif isinstance(e, asyncio.TimeoutError):
-                        f.error = f"{f.local} did not respond"
-                    else:
-                        f.error = f"Could not start the sync: {util.clean_error(str(e)) or type(e).__name__}"
-                    f.error_kind = "other"
-                    f.retry_at = now + 15
-                    self.mark()
-                    started = False
-                if started:
-                    running.append(f)
+            await self._start_due_folders()
             sleep = self._scheduler_sleep(time.time())
+
+    async def _start_due_folders(self) -> None:
+        now = time.time()
+        # Kept folders never overlap (see _validate_local) and each sync has its own rclone
+        # process, so folders of the same drive sync side by side
+        running = [f for f in self.folders.values() if f.job_id]
+        # Local edits first, then never-synced folders, then routine checks
+        order = sorted(
+            self.folders.values(),
+            key=lambda f: (not f.dirty_since, f.initialized, f.next_due),
+        )
+        for f in order:
+            if len(running) >= MAX_SYNC_JOBS:
+                break
+            if not self._folder_due(f, now) or f.remote not in self.remotes:
+                continue
+            try:
+                started = await self._start_sync(f)
+            except Exception as e:
+                log.exception("could not start sync of %s", f.id)
+                # Shown on the folder, and retried soon: most causes are passing
+                if isinstance(e, OSError):
+                    f.error = f"Can't use {e.filename or f.local}: {e.strerror or e}"
+                elif isinstance(e, asyncio.TimeoutError):
+                    f.error = f"{f.local} did not respond"
+                else:
+                    f.error = f"Could not start the sync: {util.clean_error(str(e)) or type(e).__name__}"
+                f.error_kind = "other"
+                f.retry_at = now + 15
+                self.mark()
+                started = False
+            if started:
+                running.append(f)
 
     async def _start_sync(self, f: Folder) -> bool:
         now = time.time()
@@ -1519,6 +1520,7 @@ class Daemon:
         f.job_id = int(res.get("jobid", 0))
         f.job_started = now
         f.progress = {}
+        f.run_had_changes = bool(f.dirty_since and not f.followup_only)
         f.dirty_since = 0
         f.dirty_during_run = False
         f.followup_only = False
@@ -1556,7 +1558,14 @@ class Daemon:
         if lost or w is None:
             log.warning("sync %s lost its rclone process; retrying", f.id)
             await self._stop_worker(f.id)
-            f.job_id, f.progress, f.moving, f.retry_at = 0, {}, [], time.time() + 5
+            f.job_id, f.progress, f.moving = 0, {}, []
+            f.backoff = min(max(f.backoff * 2, 5.0), 300.0)
+            f.retry_at = time.time() + f.backoff
+            if f.backoff > 5:
+                # Once can be a kill from outside; again and again is worth showing
+                f.error = "rclone keeps stopping during this sync; see the log"
+                f.error_kind = "other"
+            self._keep_changes_waiting(f)
             self.mark()
             return
         if not js.get("finished"):
@@ -1625,7 +1634,6 @@ class Daemon:
                 "Kept both versions: " + ", ".join(conflicts[:3]),
             )
         if js.get("success"):
-            first_sync = not f.initialized
             f.initialized, f.resync_reason = True, ""
             if not was_resync:
                 f.recovery_attempted = False
@@ -1640,8 +1648,7 @@ class Daemon:
                 f.dirty_since = now
                 f.last_event = now + FOLLOWUP_DEBOUNCE - DEBOUNCE
                 f.followup_only = True
-            if first_sync and not f.watching:
-                self._watch_folder(f)
+            self._ensure_watching(f)
             log.info(
                 "sync %s done: %d change(s)%s",
                 f.id,
@@ -1740,24 +1747,45 @@ class Daemon:
                         f.resync_reason, f.retry_at = "recover", now + 2
                         f.error = f.error_kind = ""
                 else:
-                    if f.initialized and "must run --resync" in blob:
-                        # The cause is passing, but the next attempt still needs listings.
-                        f.resync_reason = f.resync_reason or "recover"
+                    # Never a resync, even after "must run --resync": a connection lost during
+                    # a transfer sets the listings aside, and --recover puts them back on the
+                    # next ordinary sync. A resync would bring back files deleted since the
+                    # last sync. Should the backups be gone, that sync says so and repairs.
                     if kind == "rate":
                         f.backoff = min(max(f.backoff * 2, 120.0), 1800.0)
                         detail = self._shared_client_note(f.remote) or detail
                     elif kind == "network":
-                        f.backoff = min(max(f.backoff * 2, 30.0), 600.0)
+                        # Without a route no quick retry can work, and it coming back wakes
+                        # the folder. Never stop trying: the route check can be wrong.
+                        f.backoff = (
+                            min(max(f.backoff * 2, 30.0), NETWORK_MAX_BACKOFF)
+                            if self.online
+                            else NETWORK_MAX_BACKOFF
+                        )
                     elif "retryable" in blob or "please try again" in blob:
                         f.backoff = 30.0
                     else:
                         f.backoff = min(max(f.backoff * 2, 60.0), 1800.0)
                     f.retry_at = now + f.backoff
                     f.error, f.error_kind = detail, kind
+            # Whatever started this sync, it is tried again then and not on the next timer
+            if f.retry_at > now:
+                f.next_due = min(f.next_due, f.retry_at)
+            self._keep_changes_waiting(f)
         self._persist_folder(f)
         self._recent_due = now + 1
         self.mark()
         self.wake()
+
+    def _keep_changes_waiting(self, f: Folder) -> None:
+        """A sync that didn't finish may not have carried the edits it set out with."""
+        if not (f.run_had_changes or f.dirty_during_run):
+            return
+        now = time.time()
+        f.dirty_since = f.dirty_since or now
+        f.last_event = now
+        f.followup_only = not f.run_had_changes
+        f.run_had_changes = False
 
     def _folder_attention(self, f: Folder, code: str, message: str) -> None:
         f.attention, f.attention_code = message, code
@@ -1785,6 +1813,13 @@ class Daemon:
 
     def _watch_folder(self, f: Folder) -> None:
         self._spawn(self._add_watches(f.id, f.local))
+
+    def _ensure_watching(self, f: Folder) -> None:
+        """Also a folder that went away and came back, which no first sync will rewatch. If
+        it was moved, the watches that followed it there must go."""
+        if not f.watching and not f.watch_error:
+            self._unwatch_folder(f.id)
+            self._watch_folder(f)
 
     async def _add_watches(self, fid: str, top: str) -> None:
         f = self.folders.get(fid)
@@ -1882,6 +1917,9 @@ class Daemon:
         if not f.dirty_since or f.followup_only:
             f.dirty_since = now
             f.followup_only = False
+            if self._sync_held(f):
+                # They may wait for days, across reboots: don't forget they are there
+                self._persist_folder(f)
             self.mark()
         f.last_event = now
 
@@ -1923,8 +1961,6 @@ class Daemon:
             self.online = online
             log.info("network %s", "up" if online else "down")
             if online:
-                for f in self.folders.values():
-                    f.waiting_network = False
                 self._on_resume()
             self.mark()
         if self.engine_state != "running":
@@ -2286,7 +2322,7 @@ class Daemon:
             state = "paused"
         elif f.attention:
             state = "attention"
-        elif f.waiting_network:
+        elif f.error and f.error_kind in _WAITING_KINDS:
             state = "waiting"
         elif f.error and f.retry_at > now:
             state = "error"
@@ -2307,7 +2343,7 @@ class Daemon:
             "local": f.local,
             "state": state,
             "paused": f.paused,
-            # Local edits not synced yet: while paused, what resuming will catch up
+            # Local edits not synced yet: while held back, what catching up will bring
             "localChanges": bool(f.dirty_since and not f.followup_only),
             "initialized": f.initialized,
             "lastSync": int(f.last_sync),
@@ -2333,6 +2369,7 @@ class Daemon:
         now = time.time()
         drives = []
         folder_count = syncing = attention = uploads = mounted = streaming = 0
+        waiting_network = local_changes = 0
         for name in sorted(self.remotes, key=str.lower):
             r = self.remotes[name]
             c = self.remote_cfg(name)
@@ -2348,6 +2385,12 @@ class Daemon:
             folders.sort(key=lambda x: x["path"].lower())
             folder_count += len(folders)
             syncing += sum(1 for x in folders if x["state"] == "syncing")
+            waiting_network += sum(
+                1
+                for x in folders
+                if x["state"] == "waiting" and x["errorKind"] == "network"
+            )
+            local_changes += sum(1 for x in folders if x["localChanges"])
             attention += sum(
                 1
                 for x in folders
@@ -2408,6 +2451,8 @@ class Daemon:
                 "mounted": mounted,
                 "folders": folder_count,
                 "syncing": syncing,
+                "waitingNetwork": waiting_network,
+                "localChanges": local_changes,
                 "attention": attention,
                 "uploads": uploads,
             },
@@ -3028,25 +3073,27 @@ class Daemon:
             # A sync under way is left to finish: stopping bisync part way loses its listings,
             # and the resync that repairs them brings back files deleted while paused
             f.rerun = False
+            self._persist_folder(f)
             message = (
                 f"Paused {name} once the sync under way ends; nothing else syncs until you resume"
                 if f.job_id
                 else f"Paused {name}; nothing syncs until you resume"
             )
         else:
-            # Catch up now, whatever error or backoff was pending before the pause
-            f.retry_at, f.backoff, f.next_due = 0, 0, 0
-            f.error = f.error_kind = ""
-            if not f.watching:
-                self._watch_folder(f)
+            self._catch_up(f)
             self.wake()
-            message = (
-                f"Resumed {name}; it needs attention first"
-                if f.attention
-                else f"Resumed {name}; catching up now"
-            )
+            if f.attention:
+                message = f"Resumed {name}; it needs attention first"
+            else:
+                message = f"Resumed {name}; catching up now"
         self.mark()
         return {"message": message}
+
+    def _catch_up(self, f: Folder) -> None:
+        """Sync at the first chance, whatever error or backoff was pending before."""
+        f.retry_at, f.backoff, f.next_due = 0, 0, 0
+        f.error = f.error_kind = ""
+        self._ensure_watching(f)
 
     async def cmd_set_folder(self, args: dict[str, Any]) -> dict[str, Any]:
         f = self._folder(args)
@@ -3108,22 +3155,40 @@ class Daemon:
             raise UserError(
                 f"{f.label or self._folder_default_name(f)} is paused; resume it to sync"
             )
-        paused = 0
+        if args.get("id") and targets[0].attention:
+            f = targets[0]
+            raise UserError(
+                f"{f.label or self._folder_default_name(f)} needs attention first"
+            )
+        paused = needs_you = 0
         for f in targets:
             if f.paused:
                 paused += 1
-                continue
-            f.retry_at, f.backoff, f.next_due = 0, 0, 0
-            f.error = ""
-            # The running sync may have looked before the change this is asked for
-            f.rerun = bool(f.job_id)
+            elif f.attention:
+                needs_you += 1
+            else:
+                # An explicit ask overrides any waiting, for whatever reason it was waiting
+                self._catch_up(f)
+                # The running sync may have looked before the change this is asked for
+                f.rerun = bool(f.job_id)
         self.wake()
         self.mark()
         if not targets:
             return {"message": "No folders are kept local"}
         if paused == len(targets):
             return {"message": "All folders are paused; nothing to sync"}
-        return {"message": "Syncing now" + (f" ({paused} paused)" if paused else "")}
+        skipped = []
+        if paused:
+            skipped.append(f"{paused} paused")
+        if needs_you:
+            skipped.append(
+                f"{needs_you} {'needs' if needs_you == 1 else 'need'} attention"
+            )
+        if paused + needs_you == len(targets):
+            return {"message": "Nothing to sync: " + ", ".join(skipped)}
+        return {
+            "message": "Syncing now" + (f" ({', '.join(skipped)})" if skipped else "")
+        }
 
     async def cmd_resolve(self, args: dict[str, Any]) -> dict[str, Any]:
         """Act on a folder that needs attention: force (apply), resync (restore, never deletes), dismiss."""
@@ -3148,11 +3213,12 @@ class Daemon:
             f.resync_reason = "manual"
             f.force_next = False
         f.attention = f.attention_code = f.error = f.error_kind = ""
-        f.waiting_network = False
         f.retry_at, f.backoff, f.next_due = 0, 0, 0
         self._persist_folder(f)
         self.wake()
         self.mark()
+        if action != "dismiss" and self._sync_held(f):
+            return {"message": "It runs as soon as this folder syncs again"}
         return {
             "message": {
                 "force": "Syncing anyway",
