@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "chickymonkeys.guacamole",
   "name": "Clouds Guacamole",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Alessandro Pizzigolotto",
   "license": "MIT",
   "description": "Stream Google Drive, OneDrive, Dropbox, Nextcloud and any rclone remote, and keep the folders you choose on this device with two-way sync.",
