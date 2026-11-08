@@ -334,6 +334,22 @@ class FailureTransitions(MockedJobs):
         self.assertEqual(self.new_daemon().folders["a"].conflicts, [])
         self.assertEqual(self.d.build_state()["summary"]["attention"], 0)
 
+    async def test_notifications_keep_labels_paths_and_filenames_private(self) -> None:
+        # notify-send's argv is readable by other local users; details stay in the panel
+        self.f.label = "Private label"
+        await self.start()
+        await self.finish(self.failed_job(BROKEN, CONFLICT))
+        self.local.rmdir()
+        await self.d._start_sync(self.f)
+        self.assertEqual(self.f.attention_code, "missing_local")
+        self.assertIn(str(self.local), self.f.attention)
+        self.assertEqual(self.f.conflicts, ["one.conflict1.md"])
+        sent = [" ".join(map(str, c.args[1:])) for c in self.d.notify.call_args_list]
+        self.assertEqual(len(sent), 2)
+        for private in ("Private label", "one.conflict1", str(self.local), "local"):
+            for text in sent:
+                self.assertNotIn(private, text)
+
     async def test_paused_attention_remains_in_widget_summary(self) -> None:
         self.d._folder_attention(self.f, "safety", "Check both copies")
         self.f.paused = True

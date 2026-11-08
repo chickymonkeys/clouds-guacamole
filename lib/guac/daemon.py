@@ -632,6 +632,8 @@ class Daemon:
     def notify(
         self, key: str, summary: str, body: str = "", urgency: str = "normal"
     ) -> None:
+        # notify-send's arguments are readable by other local users (/proc/<pid>/cmdline),
+        # so callers pass fixed text only. Labels, paths and errors stay in the panel.
         if not self.cfg.get("notifications", True) or not shutil.which("notify-send"):
             return
         now = time.time()
@@ -1656,8 +1658,10 @@ class Daemon:
             ]
             self.notify(
                 f"conflict:{f.id}",
-                f"Sync conflict in {f.label or os.path.basename(f.local)}",
-                "Kept both versions: " + ", ".join(conflicts[:3]),
+                "Sync conflict",
+                "Kept both versions of "
+                + (f"{len(conflicts)} files" if len(conflicts) > 1 else "a file")
+                + ". Open Clouds Guacamole to see which.",
             )
         if js.get("success"):
             f.initialized, f.resync_reason = True, ""
@@ -1819,8 +1823,8 @@ class Daemon:
         self._persist_folder(f)
         self.notify(
             f"attention:{f.id}:{code}",
-            f"{f.label or os.path.basename(f.local)} needs attention",
-            message,
+            "A synced folder needs attention",
+            "Open Clouds Guacamole for details.",
             "critical",
         )
         self.mark()
