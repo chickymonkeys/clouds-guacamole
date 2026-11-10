@@ -221,6 +221,32 @@ class FailureTransitions(MockedJobs):
         self.assertEqual(self.f.resync_reason, "recover")
         self.assertFalse(self.f.attention)
 
+    async def test_unusable_listing_backups_repair_once_instead_of_looping(
+        self,
+    ) -> None:
+        # What --recover prints when the backups it falls back to disagree, for instance on a
+        # name stored NFC in the cloud and NFD on disk. Every retry would read them again.
+        unusable = (
+            "NOTICE: Listings not found. Reverting to prior backup as --recover is set.\n"
+            "ERROR : -   Path1 file not found in Path2   - Data/données.dta\n"
+            "ERROR : -   Path2 file not found in Path1   - Data/données.dta\n"
+            "ERROR : Bisync critical error: path1 and path2 are out of sync, "
+            "run --resync to recover\n"
+            "ERROR : Bisync aborted. Error is retryable without --resync due to --resilient mode."
+        )
+        await self.start()
+        await self.finish(self.failed_job("bisync aborted", unusable))
+        self.assertEqual(self.f.resync_reason, "recover")
+        self.assertFalse(self.f.attention)
+        self.assertFalse(self.f.error)
+        params = await self.start()
+        self.assertTrue(params["resync"])
+        self.assertEqual(params["resyncMode"], "newer")
+        await self.finish(self.failed_job("bisync aborted", unusable))
+        self.assertEqual(self.f.attention_code, "resync_failed")
+        self.assertIn("out of sync", self.f.attention)
+        self.assertFalse(self.d._folder_due(self.f, time.time() + 3600))
+
     async def test_repair_cause_is_preserved_in_long_output(self) -> None:
         await self.start()
         await self.finish(
