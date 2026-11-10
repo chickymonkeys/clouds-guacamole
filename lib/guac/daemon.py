@@ -1764,6 +1764,10 @@ class Daemon:
                     was_resync
                     or "must run --resync" in blob
                     or "cannot find prior" in blob
+                    # --recover found the listings set aside and their backups don't match each
+                    # other. bisync calls it retryable, but every retry reads the same backups:
+                    # a name stored NFC in the cloud and NFD on disk fails this check for ever.
+                    or "path1 and path2 are out of sync" in blob
                     or "md5 hash not found" in blob
                 ):
                     if was_resync or f.recovery_attempted:
