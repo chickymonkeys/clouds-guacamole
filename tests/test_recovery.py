@@ -436,6 +436,20 @@ class SyncHandling(SchedulerJobs):
         self.f.retry_at = time.time() - 1
         self.assertEqual(self.state()["state"], "waiting")
 
+    async def test_token_refresh_cut_off_by_the_network_does_not_ask_to_reconnect(
+        self,
+    ) -> None:
+        await self.start()
+        await self.finish(
+            self.failed_job(
+                "couldn't find root directory ID: couldn't fetch token: "
+                'Post "https://oauth2.googleapis.com/token": remote error: tls: handshake failure'
+            )
+        )
+        self.assertFalse(self.f.attention)
+        self.assertEqual(self.state()["errorKind"], "network")
+        self.assertEqual(self.state()["state"], "waiting")
+
     async def test_stale_lock_waits_without_asking_for_attention(self) -> None:
         await self.start()
         await self.finish(self.failed_job("prior lock file found"))
