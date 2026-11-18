@@ -243,6 +243,26 @@ class PathTests(unittest.TestCase):
             ),
             "auth",
         )
+        # A token refresh lost to the network is not a revoked sign-in
+        refresh = "couldn't find root directory ID: couldn't fetch token: Post \"https://oauth2.googleapis.com/token\": "
+        for cause in (
+            "remote error: tls: handshake failure",
+            "dial tcp: lookup oauth2.googleapis.com: Temporary failure in name resolution",
+            "tls: failed to verify certificate: x509: certificate is not valid for any names",
+        ):
+            self.assertEqual(classify_error(refresh + cause), "network", cause)
+        self.assertEqual(
+            classify_error(
+                "couldn't fetch token: invalid_grant: maybe token expired? - "
+                'try refreshing with "rclone config reconnect Drive:"'
+            ),
+            "auth",
+        )
+        self.assertEqual(
+            classify_error(refresh + 'oauth2: "invalid_client" "Unauthorized"'),
+            "auth",
+        )
+        self.assertEqual(classify_error("couldn't fetch token: bad response"), "auth")
 
     def test_bisync_failures(self) -> None:
         from guac.daemon import _transient_failure

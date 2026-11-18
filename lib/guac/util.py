@@ -158,7 +158,8 @@ def has_default_route() -> bool:
 _NETWORK_RE = re.compile(
     r"no such host|dial tcp|connection refused|network is unreachable|i/o timeout|"
     r"context deadline exceeded|tls handshake timeout|connection reset|temporary failure in name resolution|"
-    r"server misbehaving|no route to host|eof$|unexpected eof|timeout awaiting response",
+    r"server misbehaving|no route to host|eof$|unexpected eof|timeout awaiting response|"
+    r"remote error: tls|x509:",
     re.IGNORECASE,
 )
 _RATE_RE = re.compile(
@@ -166,7 +167,7 @@ _RATE_RE = re.compile(
     re.IGNORECASE,
 )
 _AUTH_RE = re.compile(
-    r"invalid_grant|token expired|unauthorized|\b401\b|invalid_client|couldn't fetch token|"
+    r"invalid_grant|token expired|unauthorized|\b401\b|invalid_client|"
     r"re-authenticate|reauthorize|authentication failed|access denied|invalid credentials",
     re.IGNORECASE,
 )
@@ -180,6 +181,9 @@ def classify_error(text: str) -> str:
         return "rate"
     if _NETWORK_RE.search(text or ""):
         return "network"
+    # rclone says this of every failed token refresh, one cut off by the network too
+    if "couldn't fetch token" in (text or "").lower():
+        return "auth"
     return "other"
 
 
